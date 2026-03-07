@@ -223,7 +223,6 @@ class HookManager:
             True to block the key from the OS, False to pass through.
         """
         if self.is_correcting:
-            logger.log(5, "EVENT: hook received vk=%02X but is_correcting=True", vk_code)
             if vk_code in DELIMITER_VKS:
                 self.pending_queue.append((vk_code, self._shift_pressed))
             else:
@@ -306,11 +305,6 @@ class HookManager:
             self.buffer_active += en_char
             self.buffer_shadow += he_char
 
-        logger.log(5,
-            'EVENT: hook processed Key VK=0x%02X -> active="%s"',
-            vk_code, self.buffer_active
-        )
-
         if len(self.buffer_active) >= 3:
             should_switch, diff = self.engine.evaluate(
                 self.buffer_active,
@@ -354,7 +348,6 @@ class HookManager:
         self._clear_history()  # context ends here
 
         # Synchronously lock OS passthrough before thread spins up
-        logger.log(5, "EVENT: Acquiring atomic lock (is_correcting=True)")
         self._set_correcting(True)
 
         switch_thread = threading.Thread(
@@ -408,14 +401,11 @@ class HookManager:
                     elif vk in (VK_CONTROL, VK_LCONTROL, VK_RCONTROL):
                         self._ctrl_pressed = True
                     elif vk in MODIFIER_VKS:
-                        logger.log(5, "EVENT: Hook passing through modifier key vk=%02X", vk)
                         pass
                     else:
                         block = self._handle_keypress(vk)
                         if block:
-                            logger.log(5, "EVENT: Hook blocking key vk=%02X", vk)
                             return 1
-                        logger.log(5, "EVENT: Hook allowing key vk=%02X", vk)
                 else:
                     # Key up
                     if vk in (VK_SHIFT, VK_LSHIFT, VK_RSHIFT):

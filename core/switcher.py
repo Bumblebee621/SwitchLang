@@ -289,8 +289,6 @@ def execute_switch(buffer_active, buffer_shadow,
 
         send_unicode_string(inject_text)
         time.sleep(0.005)
-
-        logger.log(5, "EVENT: Thread popping pending queue, current size: %d", len(pending_queue))
         # Inject pending queue
         text_to_inject = ""
         while pending_queue:
@@ -298,14 +296,10 @@ def execute_switch(buffer_active, buffer_shadow,
             
             # Map the raw typed key to a character in the TARGET layout.
             ch = vk_to_char(q_vk, q_shift, layout=target_layout)
-            logger.log(5, "EVENT: Thread popped vk=%02X -> mapped to '%s'", q_vk, ch)
             if ch:
                 text_to_inject += ch
 
         if text_to_inject:
-            logger.log(5, "EVENT: Injecting pending queue text: '%s'", text_to_inject)
             send_unicode_string(text_to_inject)
-        logger.log(5, "EVENT: Thread finished executing switch")
-        
     finally:
         set_correcting(False)
