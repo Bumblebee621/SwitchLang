@@ -114,33 +114,39 @@ HEBREW_SAMPLE = """
 """
 
 
-def build_trigrams(text):
-    """Build trigram and bigram frequency counts from text.
+def build_trigrams_from_file(file_path):
+    """Build trigram and bigram frequency counts from a large text file.
+    
+    Streams the file line by line to prevent memory exhaustion.
 
     Args:
-        text: Raw text string.
+        file_path: Path to the plain text corpus.
 
     Returns:
         Dict with 'trigram_counts', 'bigram_counts', 'vocab_size'.
     """
-    text = text.lower().strip()
-
-    chars = set()
-    for ch in text:
-        if not ch.isspace():
-            chars.add(ch)
-
     trigram_counts = Counter()
     bigram_counts = Counter()
+    chars = set()
 
-    words = text.split()
-    for word in words:
-        word = ' ' + word + ' '
-        for i in range(len(word) - 2):
-            trigram = word[i:i + 3]
-            bigram = word[i:i + 2]
-            trigram_counts[trigram] += 1
-            bigram_counts[bigram] += 1
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.lower().strip()
+            if not line:
+                continue
+
+            for ch in line:
+                if not ch.isspace():
+                    chars.add(ch)
+
+            words = line.split()
+            for word in words:
+                word = ' ' + word + ' '
+                for i in range(len(word) - 2):
+                    trigram = word[i:i + 3]
+                    bigram = word[i:i + 2]
+                    trigram_counts[trigram] += 1
+                    bigram_counts[bigram] += 1
 
     return {
         'trigram_counts': dict(trigram_counts),
@@ -154,9 +160,17 @@ def main():
     project_dir = os.path.dirname(script_dir)
     data_dir = os.path.join(project_dir, 'data')
     os.makedirs(data_dir, exist_ok=True)
+    
+    en_txt_path = os.path.join(data_dir, 'en_corpus.txt')
+    he_txt_path = os.path.join(data_dir, 'he_corpus.txt')
+    
+    if not os.path.exists(en_txt_path) or not os.path.exists(he_txt_path):
+        print("ERROR: Corpora text files not found!")
+        print("Please run `python scripts/download_corpora.py` first to download the Wikipedia dumps.")
+        sys.exit(1)
 
-    print('Building English trigram model...')
-    en_data = build_trigrams(ENGLISH_SAMPLE)
+    print('Building English trigram model (this may take a minute depending on corpus size)...')
+    en_data = build_trigrams_from_file(en_txt_path)
     en_path = os.path.join(data_dir, 'en_trigrams.json')
     with open(en_path, 'w', encoding='utf-8') as f:
         json.dump(en_data, f, ensure_ascii=False, indent=2)
@@ -166,8 +180,8 @@ def main():
     print(f'  Saved to: {en_path}')
 
     print()
-    print('Building Hebrew trigram model...')
-    he_data = build_trigrams(HEBREW_SAMPLE)
+    print('Building Hebrew trigram model (this may take a minute depending on corpus size)...')
+    he_data = build_trigrams_from_file(he_txt_path)
     he_path = os.path.join(data_dir, 'he_trigrams.json')
     with open(he_path, 'w', encoding='utf-8') as f:
         json.dump(he_data, f, ensure_ascii=False, indent=2)

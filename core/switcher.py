@@ -122,6 +122,39 @@ user32.GetKeyboardLayout.restype = wintypes.HKL
 user32.GetKeyboardLayout.argtypes = [wintypes.DWORD]
 user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 user32.PostMessageW.restype = wintypes.BOOL
+user32.GetKeyboardLayoutList.restype = ctypes.c_int
+user32.GetKeyboardLayoutList.argtypes = [ctypes.c_int, ctypes.POINTER(wintypes.HKL)]
+
+_cached_hkl_en = None
+_cached_hkl_he = None
+
+def _resolve_hkls():
+    """Discover the actual HKL handles for English and Hebrew on this system."""
+    global _cached_hkl_en, _cached_hkl_he
+    if _cached_hkl_en and _cached_hkl_he:
+        return
+
+    count = user32.GetKeyboardLayoutList(0, None)
+    if count == 0:
+        return
+
+    hkl_array = (wintypes.HKL * count)()
+    user32.GetKeyboardLayoutList(count, hkl_array)
+
+    for hkl in hkl_array:
+        lang_id = ctypes.c_ulong(hkl).value & 0xFFFF
+        primary_lang = lang_id & 0x03FF
+        
+        if lang_id == 0x0409:
+            _cached_hkl_en = hkl
+        elif lang_id == 0x040D:
+            _cached_hkl_he = hkl
+
+        # Fallbacks to primary lang if specific sublang isn't found
+        if not _cached_hkl_en and primary_lang == 0x09:
+            _cached_hkl_en = hkl
+        if not _cached_hkl_he and primary_lang == 0x0D:
+            _cached_hkl_he = hkl
 
 def toggle_layout(target_layout):
     """Toggle the OS keyboard layout for the foreground window and wait.
@@ -133,17 +166,24 @@ def toggle_layout(target_layout):
     if not hwnd:
         return
 
-    hkl = HKL_EN_US if target_layout == 'en' else HKL_HE
+    _resolve_hkls()
+    hkl = _cached_hkl_en if target_layout == 'en' else _cached_hkl_he
+    
+    # If we couldn't resolve the HKL, fallback to the hardcoded constants
+    if not hkl:
+        hkl = HKL_EN_US if target_layout == 'en' else HKL_HE
+
     user32.PostMessageW(hwnd, WM_INPUTLANGCHANGEREQUEST, 0, hkl)
     
     # Wait for the layout to actually change to prevent race conditions
     thread_id = user32.GetWindowThreadProcessId(hwnd, None)
-    expected_lang_id = 0x0409 if target_layout == 'en' else 0x040D
+    expected_primary = 0x09 if target_layout == 'en' else 0x0D
     
     for _ in range(10):  # Wait up to 100ms
         current_hkl = user32.GetKeyboardLayout(thread_id)
         lang_id = current_hkl & 0xFFFF
-        if lang_id == expected_lang_id:
+        primary_lang = lang_id & 0x03FF
+        if primary_lang == expected_primary:
             break
         time.sleep(0.01)
 
@@ -157,10 +197,11 @@ def get_current_layout():
     thread_id = user32.GetWindowThreadProcessId(hwnd, None)
     hkl = user32.GetKeyboardLayout(thread_id)
     lang_id = hkl & 0xFFFF
+    primary_lang = lang_id & 0x03FF
 
-    if lang_id == 0x0409:
+    if primary_lang == 0x09:
         return 'en'
-    elif lang_id == 0x040D:
+    elif primary_lang == 0x0D:
         return 'he'
     return 'unknown'
 

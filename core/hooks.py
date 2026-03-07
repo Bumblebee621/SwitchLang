@@ -50,7 +50,6 @@ VK_RMENU = 0xA5
 VK_RETURN = 0x0D
 VK_SPACE = 0x20
 VK_BACK = 0x08
-VK_TAB = 0x09
 
 MODIFIER_VKS = {
     VK_SHIFT, VK_LSHIFT, VK_RSHIFT,
@@ -60,7 +59,6 @@ MODIFIER_VKS = {
 
 DELIMITER_VKS = {VK_SPACE, VK_RETURN, VK_TAB}
 
-HARD_DELIM_CHARS = {'.', '?', '!'}
 
 # Low-level hook callback type (WINFUNCTYPE = stdcall convention)
 HOOKPROC = ctypes.WINFUNCTYPE(
@@ -140,7 +138,6 @@ class HookManager:
         self._mouse_listener = None
         self._running = False
 
-        self._last_hard_delim = False
         self._shift_pressed = False
         self._ctrl_pressed = False
         self._on_switch_callback = None
@@ -220,9 +217,6 @@ class HookManager:
 
         if vk_code in DELIMITER_VKS:
             if self.buffer_active:
-                if self._last_hard_delim:
-                    self.sensitivity.reset(reason='hard_delimiter')
-                    logger.debug('Hard delimiter — reset sensitivity')
 
                 current = self._cached_layout
                 should_switch, diff = self.engine.evaluate(
@@ -246,17 +240,12 @@ class HookManager:
 
                 self.sensitivity.on_word_complete()
             self._clear_buffers()
-            self._last_hard_delim = False
             return False
 
         en_char, he_char = get_both_chars(vk_code, self._shift_pressed)
         if en_char is None:
             return False
 
-        if en_char in HARD_DELIM_CHARS or he_char in HARD_DELIM_CHARS:
-            self._last_hard_delim = True
-        else:
-            self._last_hard_delim = False
 
         current = self._cached_layout
         if current == 'en':
@@ -429,12 +418,17 @@ class HookManager:
         """
         while self._running:
             try:
-                layout = get_current_layout()
-                self._cached_layout = layout
-
-                self._cached_blacklisted = (
-                    self.blacklist.is_blacklisted()
-                )
+                # Detect manual layout changes
+                new_layout = get_current_layout()
+                if new_layout != self._cached_layout and new_layout != 'unknown':
+                    # Only trigger a reset if we aren't already in the middle of our own auto-switch
+                    if not self.is_correcting:
+                        logger.debug(f"Manual Layout Change detected ({self._cached_layout} -> {new_layout}) — triggering CRE")
+                        self.sensitivity.reset(reason='manual_layout_change')
+                        self._clear_buffers()
+                
+                self._cached_layout = new_layout
+                self._cached_blacklisted = self.blacklist.is_blacklisted()
 
                 hwnd = user32.GetForegroundWindow()
                 if self.sensitivity.check_window_change(hwnd):

@@ -39,7 +39,7 @@ class SensitivityManager:
         self._word_count += 1
         self._delta = (
             self.baseline_delta
-            + self.alpha * math.log(1 + self._word_count)
+            + self.alpha * self._word_count
         )
 
     def reset(self, reason='unknown'):

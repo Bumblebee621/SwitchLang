@@ -16,6 +16,8 @@ venv.bak/
 # Project Specific
 config.json
 switchlang.log
+data/*.txt
+data/*.gz
 data/*.json
 !data/en_trigrams.json
 !data/he_trigrams.json
