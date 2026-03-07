@@ -5,8 +5,11 @@ sensitivity.py — Dynamic Δ threshold with Context Resumption Events.
 as a continuous sentence lengthens. CREs reset Δ to baseline.
 """
 
+import logging
 import math
 import time
+
+logger = logging.getLogger('switchlang.sensitivity')
 
 
 class SensitivityManager:
@@ -48,6 +51,8 @@ class SensitivityManager:
         Args:
             reason: Descriptive reason for the reset (for logging).
         """
+        logger.debug('Sensitivity reset (reason=%s) delta %.2f -> %.2f',
+                     reason, self._delta, self.baseline_delta)
         self._word_count = 0
         self._delta = self.baseline_delta
 

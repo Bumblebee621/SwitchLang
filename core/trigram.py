@@ -30,6 +30,15 @@ class TrigramModel:
         self.bigram_counts = data.get('bigram_counts', {})
         self.vocab_size = data.get('vocab_size', 30)
 
+        # Pre-compute total bigram count across the entire corpus for absolute probabilities
+        self.total_bigrams = sum(self.bigram_counts.values())
+
+        # Pre-compute per-first-character bigram totals for O(1) lookup
+        # Used by the 2-char fallback in score() instead of scanning the whole dict.
+        self._bigram_first_totals = {}
+        for k, c in self.bigram_counts.items():
+            self._bigram_first_totals[k[0]] = self._bigram_first_totals.get(k[0], 0) + c
+
     def score(self, text):
         """Compute the log-probability score of a string.
 
@@ -55,12 +64,14 @@ class TrigramModel:
         if len(text) == 2:
             bigram = text
             count = self.bigram_counts.get(bigram, 0)
-            total = sum(
-                c for k, c in self.bigram_counts.items()
-                if k[0] == text[0]
-            )
+            total = self._bigram_first_totals.get(text[0], 0)
             log_prob = math.log((count + 1) / (total + v))
             return log_prob
+
+        # Base the score heavily on the absolute probability of the first bigram
+        first_bigram = text[:2]
+        bi_comp_count = self.bigram_counts.get(first_bigram, 0)
+        log_prob = math.log((bi_comp_count + 1) / (self.total_bigrams + v))
 
         for i in range(len(text) - 2):
             trigram = text[i:i + 3]

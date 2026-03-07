@@ -50,6 +50,7 @@ VK_RMENU = 0xA5
 VK_RETURN = 0x0D
 VK_SPACE = 0x20
 VK_BACK = 0x08
+VK_TAB = 0x09
 
 MODIFIER_VKS = {
     VK_SHIFT, VK_LSHIFT, VK_RSHIFT,
@@ -58,6 +59,14 @@ MODIFIER_VKS = {
 }
 
 DELIMITER_VKS = {VK_SPACE, VK_RETURN, VK_TAB}
+
+# Maps delimiter VK codes to their actual characters for re-injection
+DELIMITER_CHARS = {VK_SPACE: ' ', VK_RETURN: '\n', VK_TAB: '\t'}
+
+# Stores a completed word and its metadata for retroactive correction
+_WordEntry = collections.namedtuple(
+    '_WordEntry', ['active', 'shadow', 'delimiter', 'is_ambiguous']
+)
 
 
 # Low-level hook callback type (WINFUNCTYPE = stdcall convention)
@@ -124,10 +133,14 @@ class HookManager:
         self.config = config
 
         self.enabled = config.get('enabled', True)
-        self.idle_timeout = config.get('idle_timeout_seconds', 5.0)
+        self.idle_timeout = config.get('idle_timeout_seconds', 15.0)
 
         self.buffer_active = ''
         self.buffer_shadow = ''
+
+        # Lookback queue: stores _WordEntry items for completed words in the
+        # current CRE session. Cleared on every CRE and after every switch.
+        self.history_deque = collections.deque()
 
         self.is_correcting = False
         self.pending_queue = collections.deque()
@@ -160,12 +173,41 @@ class HookManager:
         self.is_correcting = val
 
     def _clear_buffers(self):
-        """Clear both layout buffers."""
-        if self.buffer_active:
-            logger.debug('Clearing buffers: active="%s" shadow="%s"',
-                         self.buffer_active, self.buffer_shadow)
+        """Clear both layout buffers (word-level only)."""
         self.buffer_active = ''
         self.buffer_shadow = ''
+
+    def _clear_history(self):
+        """Clear the CRE-scoped word history deque.
+
+        Called on every Context Resumption Event and after every switch
+        to prevent retroactive corrections from crossing context boundaries.
+        """
+        if self.history_deque:
+            logger.debug('Clearing history deque (%d entries)', len(self.history_deque))
+        self.history_deque.clear()
+
+    def _build_correction_block(self):
+        """Collect the contiguous ambiguous words from the tail of the history.
+
+        Walks backward from the most recent word, gathering all entries where
+        is_ambiguous=True. Stops at the first non-ambiguous word.
+
+        Returns:
+            List of _WordEntry in chronological order (oldest first).
+        """
+        block = []
+        for entry in reversed(self.history_deque):
+            if entry.is_ambiguous:
+                block.insert(0, entry)
+            else:
+                break
+        if block:
+            logger.debug(
+                'Correction block: %d ambiguous words: %s',
+                len(block), [e.active for e in block]
+            )
+        return block
 
     def _handle_keypress(self, vk_code):
         """Process a single keypress through the evaluation pipeline.
@@ -181,13 +223,14 @@ class HookManager:
             True to block the key from the OS, False to pass through.
         """
         if self.is_correcting:
-            en_ch, he_ch = get_both_chars(vk_code, self._shift_pressed)
-            if en_ch is not None:
-                self.pending_queue.append(
-                    (vk_code, self._shift_pressed)
-                )
-                return True
-            return False
+            logger.log(5, "EVENT: hook received vk=%02X but is_correcting=True", vk_code)
+            if vk_code in DELIMITER_VKS:
+                self.pending_queue.append((vk_code, self._shift_pressed))
+            else:
+                en_ch, he_ch = get_both_chars(vk_code, self._shift_pressed)
+                if en_ch is not None:
+                    self.pending_queue.append((vk_code, self._shift_pressed))
+            return True
 
         if not self.enabled:
             return False
@@ -199,14 +242,6 @@ class HookManager:
         if self._ctrl_pressed:
             return False
 
-        idle_timeout = self.sensitivity.check_idle_timeout(
-            self.idle_timeout
-        )
-        if idle_timeout:
-            self.sensitivity.reset(reason='idle_timeout')
-            self._clear_buffers()
-            logger.debug('Idle timeout — reset sensitivity')
-
         self.sensitivity.record_keystroke()
 
         if vk_code == VK_BACK:
@@ -216,8 +251,9 @@ class HookManager:
             return False
 
         if vk_code in DELIMITER_VKS:
-            if self.buffer_active:
+            delimiter_char = DELIMITER_CHARS.get(vk_code, ' ')
 
+            if self.buffer_active:
                 current = self._cached_layout
                 should_switch, diff = self.engine.evaluate(
                     self.buffer_active,
@@ -226,17 +262,29 @@ class HookManager:
                     current_layout=current,
                     on_delimiter=True
                 )
+
+                # Coalesce the evaluation and dictionary decision into one record
+                is_ambiguous = self.engine.check_collision(
+                    self.buffer_active, self.buffer_shadow
+                )
+                
                 logger.debug(
-                    'Delimiter eval: active="%s" shadow="%s" '
-                    'diff=%.2f delta=%.2f switch=%s layout=%s',
-                    self.buffer_active, self.buffer_shadow,
-                    diff, self.sensitivity.delta,
-                    should_switch, current
+                    'EVAL: "%s" (%s) -> "%s" | diff=%+.2f vs delta=%.2f | switch=%s | ambiguous=%s',
+                    self.buffer_active, current, self.buffer_shadow, diff,
+                    self.sensitivity.delta, should_switch, is_ambiguous
                 )
 
                 if should_switch:
-                    self._trigger_switch()
-                    return False
+                    self._trigger_switch(delimiter_char=delimiter_char)
+                    return True
+
+                # Word is not a switch trigger — record it in history.
+                self.history_deque.append(_WordEntry(
+                    active=self.buffer_active,
+                    shadow=self.buffer_shadow,
+                    delimiter=delimiter_char,
+                    is_ambiguous=is_ambiguous,
+                ))
 
                 self.sensitivity.on_word_complete()
             self._clear_buffers()
@@ -258,9 +306,9 @@ class HookManager:
             self.buffer_active += en_char
             self.buffer_shadow += he_char
 
-        logger.debug(
-            'Key VK=0x%02X: active="%s" shadow="%s" (layout=%s)',
-            vk_code, self.buffer_active, self.buffer_shadow, current
+        logger.log(5,
+            'EVENT: hook processed Key VK=0x%02X -> active="%s"',
+            vk_code, self.buffer_active
         )
 
         if len(self.buffer_active) >= 3:
@@ -276,33 +324,49 @@ class HookManager:
             )
             if should_switch:
                 self._trigger_switch()
-                return False
+                return True
 
         return False
 
-    def _trigger_switch(self):
-        """Initiate the layout correction sequence."""
+    def _trigger_switch(self, delimiter_char=None):
+        """Initiate the layout correction sequence.
+
+        Args:
+            delimiter_char: The delimiter character that triggered the switch
+                (space, newline, tab), or None for mid-word triggers. Used to
+                calculate the exact number of backspaces needed.
+        """
         current = self._cached_layout
         target = 'he' if current == 'en' else 'en'
 
+        # Build the retroactive correction block BEFORE clearing history.
+        correction_block = self._build_correction_block()
+
         logger.info(
-            'SWITCHING: "%s" -> "%s" (layout %s -> %s)',
-            self.buffer_active, self.buffer_shadow, current, target
+            'SWITCHING: "%s" -> "%s" (layout %s -> %s) lookback=%d words',
+            self.buffer_active, self.buffer_shadow, current, target,
+            len(correction_block)
         )
 
         buf_active = self.buffer_active
         buf_shadow = self.buffer_shadow
         self._clear_buffers()
+        self._clear_history()  # context ends here
+
+        # Synchronously lock OS passthrough before thread spins up
+        logger.log(5, "EVENT: Acquiring atomic lock (is_correcting=True)")
+        self._set_correcting(True)
 
         switch_thread = threading.Thread(
             target=self._do_switch,
-            args=(buf_active, buf_shadow, target),
+            args=(buf_active, buf_shadow, target, correction_block, delimiter_char),
             daemon=True,
             name='SwitchThread'
         )
         switch_thread.start()
 
-    def _do_switch(self, buf_active, buf_shadow, target):
+    def _do_switch(self, buf_active, buf_shadow, target,
+                   correction_block=None, trigger_delimiter=None):
         """Run the switch on a separate thread to avoid blocking
         the hook callback."""
         execute_switch(
@@ -310,7 +374,9 @@ class HookManager:
             buf_shadow,
             self.pending_queue,
             self._set_correcting,
-            target
+            target,
+            correction_block=correction_block,
+            trigger_delimiter=trigger_delimiter,
         )
 
         self._cached_layout = target
@@ -331,7 +397,7 @@ class HookManager:
 
                 # Skip injected/synthetic keys (our own SendInput)
                 if kb.flags & LLKHF_INJECTED:
-                    return user32.CallNextHookEx(
+                    return _user32.CallNextHookEx(
                         self._hook_id, n_code, w_param, l_param
                     )
 
@@ -342,11 +408,14 @@ class HookManager:
                     elif vk in (VK_CONTROL, VK_LCONTROL, VK_RCONTROL):
                         self._ctrl_pressed = True
                     elif vk in MODIFIER_VKS:
+                        logger.log(5, "EVENT: Hook passing through modifier key vk=%02X", vk)
                         pass
                     else:
                         block = self._handle_keypress(vk)
                         if block:
+                            logger.log(5, "EVENT: Hook blocking key vk=%02X", vk)
                             return 1
+                        logger.log(5, "EVENT: Hook allowing key vk=%02X", vk)
                 else:
                     # Key up
                     if vk in (VK_SHIFT, VK_LSHIFT, VK_RSHIFT):
@@ -405,10 +474,17 @@ class HookManager:
         logger.info('Keyboard hook removed')
 
     def _on_mouse_click(self, x, y, button, pressed):
-        """Mouse click callback — triggers CRE."""
-        if pressed:
+        """Mouse click callback — triggers CRE on left/right click.
+
+        Per the Game Plan spec, both left and right mouse buttons indicate
+        a caret jump. Middle-click (paste) is excluded as it does not move
+        the caret.
+        """
+        if pressed and button != pynput_mouse.Button.middle:
+            logger.debug('--- Mouse Click: Context Resumption Event ---')
             self.sensitivity.reset(reason='mouse_click')
             self._clear_buffers()
+            self._clear_history()
 
     def _poll_foreground_window(self):
         """Periodically update cached layout and blacklist status.
@@ -418,23 +494,41 @@ class HookManager:
         """
         while self._running:
             try:
-                # Detect manual layout changes
-                new_layout = get_current_layout()
-                if new_layout != self._cached_layout and new_layout != 'unknown':
-                    # Only trigger a reset if we aren't already in the middle of our own auto-switch
-                    if not self.is_correcting:
-                        logger.debug(f"Manual Layout Change detected ({self._cached_layout} -> {new_layout}) — triggering CRE")
-                        self.sensitivity.reset(reason='manual_layout_change')
-                        self._clear_buffers()
-                
-                self._cached_layout = new_layout
+                # Skip layout detection entirely while a switch is in progress
+                # to avoid a race where the poll overwrites _cached_layout with
+                # the old OS value before _do_switch has set the target.
+                if not self.is_correcting:
+                    new_layout = get_current_layout()
+                    if new_layout != 'unknown':
+                        if new_layout != self._cached_layout:
+                            logger.debug(
+                                'Manual layout change detected (%s -> %s) — triggering CRE',
+                                self._cached_layout, new_layout
+                            )
+                            self.sensitivity.reset(reason='manual_layout_change')
+                            self._clear_buffers()
+                            self._clear_history()
+                        self._cached_layout = new_layout
+
                 self._cached_blacklisted = self.blacklist.is_blacklisted()
 
                 hwnd = user32.GetForegroundWindow()
                 if self.sensitivity.check_window_change(hwnd):
+                    logger.debug('--- Window Change: Context Resumption Event ---')
                     self.sensitivity.reset(reason='window_change')
                     self._clear_buffers()
-                    logger.debug('Window change — reset sensitivity')
+                    self._clear_history()
+
+                # Idle timeout check belongs here, not in the hot hook callback.
+                # IMPORTANT: call record_keystroke() after firing so the timer
+                # resets — otherwise this triggers every 100ms while idle.
+                if self.enabled and self.sensitivity.check_idle_timeout(self.idle_timeout):
+                    self.sensitivity.reset(reason='idle_timeout')
+                    self.sensitivity.record_keystroke()
+                    self._clear_buffers()
+                    self._clear_history()
+                    logger.debug('Idle timeout — reset sensitivity')
+
             except Exception:
                 logger.exception('Error in foreground poll')
 

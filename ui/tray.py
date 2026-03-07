@@ -2,8 +2,6 @@
 tray.py — System tray icon and context menu.
 """
 
-import os
-import sys
 
 from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QApplication
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QAction
@@ -51,7 +49,7 @@ class SystemTrayApp(QSystemTrayIcon):
 
         self._build_menu()
 
-        self.activated.connect(self._on_activated)
+        self.activated[QSystemTrayIcon.ActivationReason].connect(self._on_activated)
 
     def _build_menu(self):
         """Build the tray context menu."""

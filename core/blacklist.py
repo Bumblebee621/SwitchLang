@@ -7,12 +7,15 @@ check it against a user-managed blacklist of executables.
 
 import ctypes
 import ctypes.wintypes as wintypes
-import os
 import json
+import logging
+import os
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 psapi = ctypes.windll.psapi
+
+logger = logging.getLogger('switchlang.blacklist')
 
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
@@ -33,17 +36,26 @@ class BlacklistManager:
     def _load(self):
         """Load blacklist from config file."""
         if os.path.exists(self.config_path):
-            with open(self.config_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            self.blacklisted = set(
-                exe.lower() for exe in data.get('blacklist', [])
-            )
+            try:
+                with open(self.config_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                self.blacklisted = set(
+                    exe.lower() for exe in data.get('blacklist', [])
+                )
+            except json.JSONDecodeError:
+                logger.error('Malformed config file: %s — blacklist not loaded',
+                             self.config_path)
 
     def save(self):
         """Persist the current blacklist to config.json."""
         if os.path.exists(self.config_path):
-            with open(self.config_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            try:
+                with open(self.config_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except json.JSONDecodeError:
+                logger.error('Malformed config file: %s — overwriting with blacklist only',
+                             self.config_path)
+                data = {}
         else:
             data = {}
 
@@ -112,7 +124,10 @@ class BlacklistManager:
             True if the current foreground exe is in the blacklist.
         """
         exe = self.get_foreground_exe()
-        return exe in self.blacklisted
+        result = exe in self.blacklisted
+        if result:
+            logger.debug('Blacklisted app active: %s', exe)
+        return result
 
     def get_list(self):
         """Get the sorted list of blacklisted executables.

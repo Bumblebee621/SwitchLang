@@ -7,6 +7,7 @@ and the PyQt6 system tray UI.
 
 import json
 import logging
+import logging.handlers
 import os
 import sys
 
@@ -15,12 +16,13 @@ logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
     handlers=[
-        logging.FileHandler(
+        logging.handlers.RotatingFileHandler(
             os.path.join(
                 os.path.dirname(os.path.abspath(__file__)),
                 'switchlang.log'
             ),
-            mode='w', encoding='utf-8'
+            mode='a', encoding='utf-8',
+            maxBytes=5_000_000, backupCount=3
         ),
         logging.StreamHandler(sys.stdout)
     ]

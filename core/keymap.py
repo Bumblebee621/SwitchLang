@@ -19,6 +19,9 @@ EN_TO_HE = {
 }
 
 # Shifted keys
+# NOTE: Hebrew has no letter case, so Shift+letter produces the same Hebrew
+# letter as unshifted. Q->/ and W->\' are also identical to unshifted because
+# those punctuation keys don't change under Shift on the Israeli keyboard.
 EN_TO_HE_SHIFT = {
     'Q': '/',  'W': '\'', 'E': 'ק',  'R': 'ר',  'T': 'א',
     'Y': 'ט',  'U': 'ו',  'I': 'ן',  'O': 'ם',  'P': 'פ',
@@ -104,6 +107,10 @@ def vk_to_char(vk_code, shifted, layout='en'):
     Returns:
         The character string, or None if unmapped.
     """
+    if vk_code == 0x20: return ' '
+    if vk_code == 0x0D: return '\n'
+    if vk_code == 0x09: return '\t'
+
     table = VK_TO_CHARS_SHIFT if shifted else VK_TO_CHARS
     pair = table.get(vk_code)
     if pair is None:

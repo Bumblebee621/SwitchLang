@@ -24,6 +24,10 @@ class SettingsWindow(QMainWindow):
         self.config_path = config_path
         self.blacklist_manager = blacklist_manager
 
+        # Guard: timer is created inside _build_blacklist_tab; initialise
+        # to None here so closeEvent is safe even if construction fails.
+        self._fg_timer = None
+
         self.setWindowTitle('SwitchLang — Settings')
         self.setFixedSize(520, 560)
         self.setWindowFlags(
@@ -115,7 +119,9 @@ class SettingsWindow(QMainWindow):
         )
         slider_row.addWidget(self.sensitivity_slider)
 
-        self.delta_label = QLabel('Δ = 2.0')
+        # I1: initialise label from slider's actual default, not a hardcoded string.
+        _default_delta = self.sensitivity_slider.value() / 10.0
+        self.delta_label = QLabel(f'\u0394 = {_default_delta:.1f}')
         self.delta_label.setFixedWidth(60)
         self.delta_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.delta_label.setStyleSheet(
@@ -183,18 +189,17 @@ class SettingsWindow(QMainWindow):
         return tab
 
     def _update_status_label(self, checked):
-        """Update the status indicator when the toggle changes."""
+        """Update the status indicator when the toggle changes.
+
+        B3: Use direct setStyleSheet instead of objectName + unpolish/polish,
+        which is unreliable in PyQt6 when the object name changes at runtime.
+        """
         if checked:
             self.status_label.setText('● Active')
-            self.status_label.setObjectName('status_active')
+            self.status_label.setStyleSheet('color: #a6e3a1; font-weight: bold;')
         else:
             self.status_label.setText('● Inactive')
-            self.status_label.setObjectName('status_inactive')
-        self.status_label.setStyleSheet(
-            self.status_label.styleSheet()
-        )
-        self.status_label.style().unpolish(self.status_label)
-        self.status_label.style().polish(self.status_label)
+            self.status_label.setStyleSheet('color: #f38ba8; font-weight: bold;')
 
     def _update_delta_label(self, value):
         """Update the delta display when the slider moves."""
@@ -205,8 +210,11 @@ class SettingsWindow(QMainWindow):
         """Load settings from config.json into the UI."""
         data = {}
         if os.path.exists(self.config_path):
-            with open(self.config_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            try:
+                with open(self.config_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                data = {}
 
         self.enable_check.setChecked(data.get('enabled', True))
         delta = data.get('baseline_delta', 2.0)
@@ -220,8 +228,11 @@ class SettingsWindow(QMainWindow):
         """Save current UI state to config.json and emit signal."""
         data = {}
         if os.path.exists(self.config_path):
-            with open(self.config_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            try:
+                with open(self.config_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                data = {}
 
         data['enabled'] = self.enable_check.isChecked()
         data['baseline_delta'] = self.sensitivity_slider.value() / 10.0
@@ -283,6 +294,7 @@ class SettingsWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Hide window and stop timer instead of closing."""
-        self._fg_timer.stop()
+        if self._fg_timer is not None:
+            self._fg_timer.stop()
         event.ignore()
         self.hide()
