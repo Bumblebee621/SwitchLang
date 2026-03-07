@@ -132,6 +132,9 @@ def build_trigrams_from_file(file_path):
     with open(file_path, 'r', encoding='utf-8') as f:
         for line in f:
             line = line.lower().strip()
+            # Remove Right-to-Left and Left-to-Right Marks, as users don't type them
+            line = line.replace('\u200f', '').replace('\u200e', '')
+            
             if not line:
                 continue
 
@@ -141,6 +144,10 @@ def build_trigrams_from_file(file_path):
 
             words = line.split()
             for word in words:
+                # Skip words that are suspiciously long (likely missing spaces)
+                if len(word) > 12:
+                    continue
+
                 word = ' ' + word + ' '
                 for i in range(len(word) - 2):
                     trigram = word[i:i + 3]

@@ -71,7 +71,7 @@ class TrigramModel:
         # Base the score heavily on the absolute probability of the first bigram
         first_bigram = text[:2]
         bi_comp_count = self.bigram_counts.get(first_bigram, 0)
-        log_prob = math.log((bi_comp_count + 1) / (self.total_bigrams + v))
+        log_prob = math.log((bi_comp_count + 1) / (self.total_bigrams + (v ** 2)))
 
         for i in range(len(text) - 2):
             trigram = text[i:i + 3]

@@ -1,2 +1,5 @@
+# UI Framework (System Tray)
 PyQt6>=6.6
+
+# Global hooks (Mouse events, fallback)
 pynput>=1.7

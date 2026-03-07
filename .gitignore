@@ -3,6 +3,24 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
 # Environment
 .env
@@ -15,7 +33,8 @@ venv.bak/
 
 # Project Specific
 config.json
-switchlang.log
+switchlang.log*
+*.csv
 data/*.txt
 data/*.gz
 data/*.json
