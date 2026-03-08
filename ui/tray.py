@@ -78,8 +78,8 @@ class SystemTrayApp(QSystemTrayIcon):
         self._engine_enabled = True
 
     def _on_activated(self, reason):
-        """Handle tray icon activation (double-click opens settings)."""
-        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+        """Handle tray icon activation (left-click or double-click opens settings)."""
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
             self._show_settings()
 
     def _show_settings(self):

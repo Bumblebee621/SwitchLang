@@ -15,15 +15,17 @@ logger = logging.getLogger('switchlang.sensitivity')
 class SensitivityManager:
     """Manages the dynamic decision boundary threshold Δ."""
 
-    def __init__(self, baseline_delta=2.0, alpha=0.3):
+    def __init__(self, baseline_delta=4.0, alpha=0.5, p=2.0):
         """Initialize sensitivity state.
 
         Args:
             baseline_delta: The starting Δ (maximum sensitivity).
             alpha: Decay rate — controls how fast Δ grows with word count.
+            p: Power parameter for word count.
         """
         self.baseline_delta = baseline_delta
         self.alpha = alpha
+        self.p = p
         self._delta = baseline_delta
         self._word_count = 0
         self._last_keystroke_time = time.time()
@@ -42,7 +44,7 @@ class SensitivityManager:
         self._word_count += 1
         self._delta = (
             self.baseline_delta
-            + self.alpha * self._word_count
+            + self.alpha * (self._word_count ** self.p)
         )
 
     def reset(self, reason='unknown'):
@@ -90,15 +92,18 @@ class SensitivityManager:
             return True
         return False
 
-    def update_config(self, baseline_delta=None, alpha=None):
+    def update_config(self, baseline_delta=None, alpha=None, p=None):
         """Update configuration values (from UI settings).
 
         Args:
             baseline_delta: New baseline Δ value.
             alpha: New decay alpha.
+            p: New power parameter 'p'.
         """
         if baseline_delta is not None:
             self.baseline_delta = baseline_delta
         if alpha is not None:
             self.alpha = alpha
+        if p is not None:
+            self.p = p
         self.reset(reason='config_update')

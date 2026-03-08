@@ -41,6 +41,9 @@ class EvaluationEngine:
         )
         self.stats_lock = threading.Lock()
         self._pending_logs = []
+        self._logs_since_check = 0
+        self.MAX_CSV_SIZE_BYTES = 10 * 1024 * 1024
+        self.MAX_CSV_LINES = 10000
         self._ensure_stats_file()
 
     def _ensure_stats_file(self):
@@ -52,23 +55,47 @@ class EvaluationEngine:
                     writer = csv.writer(f)
                     writer.writerow([
                         'time', 'active_word', 'shadow_word', 'layout', 
-                        'on_delimiter', 'score_diff', 'category', 'should_switch'
+                        'on_delimiter', 'is_ambiguous', 'score_diff', 'category', 'should_switch'
                     ])
             except OSError:
                 pass
+        else:
+            self._rotate_stats_file()
 
-    def _log_decision(self, s_active, s_shadow, layout, on_delimiter, score_diff, should_switch):
+    def _rotate_stats_file(self):
+        """Truncate the CSV file if it exceeds the maximum allowed size."""
+        try:
+            if not os.path.exists(self.stats_path):
+                return
+            
+            file_size = os.path.getsize(self.stats_path)
+            if file_size <= self.MAX_CSV_SIZE_BYTES:
+                return
+                
+            from collections import deque
+            with open(self.stats_path, 'r', encoding='utf-8-sig', newline='') as f:
+                header = f.readline()
+                lines = deque(f, maxlen=self.MAX_CSV_LINES)
+                
+            with open(self.stats_path, 'w', encoding='utf-8-sig', newline='') as f:
+                f.write(header)
+                f.writelines(lines)
+        except OSError as e:
+            logger.warning(f"Could not rotate decision_stats.csv: {e}")
+
+    def _log_decision(self, s_active, s_shadow, layout, on_delimiter, is_ambiguous, score_diff, should_switch):
         """Log the evaluation decision to the CSV file."""
         import time
         from datetime import datetime
 
-        if score_diff >= 3.0:
+        abs_score_diff = abs(score_diff)
+        if abs_score_diff >= 3.0:
             category = ">= 3.0"
-        elif score_diff >= 2.0:
+        elif abs_score_diff >= 2.0:
             category = "2.0 - 3.0"
-        elif score_diff >= 1.0:
+        elif abs_score_diff >= 1.0:
             category = "1.0 - 2.0"
-        elif score_diff >= 0.0:
+        elif abs_score_diff >= 0.0:
             category = "0.0 - 1.0"
         else:
             category = "< 0.0"
@@ -81,7 +108,8 @@ class EvaluationEngine:
                 s_shadow,
                 layout,
                 on_delimiter,
-                f"{score_diff:.3f}",
+                is_ambiguous,
+                f"{abs_score_diff:.3f}",
                 category,
                 should_switch
             ])
@@ -95,8 +123,13 @@ class EvaluationEngine:
                     # Write all pending logs at once
                     for row in self._pending_logs:
                         writer.writerow(row)
-                    # Clear pending if successful
+                    
+                    self._logs_since_check += len(self._pending_logs)
                     self._pending_logs.clear()
+                    
+                    if self._logs_since_check > 1000:
+                        self._logs_since_check = 0
+                        self._rotate_stats_file()
             except OSError as e:
                 logger.warning(f"Could not write to decision_stats.csv (is it open in Excel?): {e}")
 
@@ -138,20 +171,33 @@ class EvaluationEngine:
         if len(s_active) < 2:
             return False, 0.0
 
-        if self.check_collision(s_active, s_shadow):
-            return False, 0.0
+        is_ambig = self.check_collision(s_active, s_shadow)
+        
+        # Prepend a space because buffer_active always represents a word start.
+        # This leverages word-boundary statistics, penalizing internal n-grams like "nkl"
+        # when they appear at the beginning of a word.
+        eval_active = ' ' + s_active
+        eval_shadow = ' ' + s_shadow
+
+        if on_delimiter:
+            eval_active += ' '
+            eval_shadow += ' '
 
         if current_layout == 'en':
-            score_active = self.en_model.score(s_active)
-            score_shadow = self.he_model.score(s_shadow)
+            score_active = self.en_model.score(eval_active)
+            score_shadow = self.he_model.score(eval_shadow)
         else:
-            score_active = self.he_model.score(s_active)
-            score_shadow = self.en_model.score(s_shadow)
+            score_active = self.he_model.score(eval_active)
+            score_shadow = self.en_model.score(eval_shadow)
 
         score_diff = score_shadow - score_active
-        should_switch = score_diff > delta
+        
+        if is_ambig:
+            should_switch = False
+        else:
+            should_switch = score_diff > delta
 
-        self._log_decision(s_active, s_shadow, current_layout, on_delimiter, score_diff, should_switch)
+        self._log_decision(s_active, s_shadow, current_layout, on_delimiter, is_ambig, score_diff, should_switch)
 
         return should_switch, score_diff
 
