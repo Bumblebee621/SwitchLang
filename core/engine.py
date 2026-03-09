@@ -104,8 +104,8 @@ class EvaluationEngine:
             # Queue the log
             self._pending_logs.append([
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
-                "*" * len(s_active),
-                "*" * len(s_shadow),
+                s_active,
+                s_shadow,
                 layout,
                 on_delimiter,
                 is_ambiguous,
