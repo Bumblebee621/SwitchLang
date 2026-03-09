@@ -104,8 +104,8 @@ class EvaluationEngine:
             # Queue the log
             self._pending_logs.append([
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
-                s_active,
-                s_shadow,
+                "*" * len(s_active),
+                "*" * len(s_shadow),
                 layout,
                 on_delimiter,
                 is_ambiguous,
@@ -165,11 +165,11 @@ class EvaluationEngine:
                           word delimiter (space, enter, etc.).
 
         Returns:
-            Tuple (should_switch: bool, score_diff: float).
+            Tuple (should_switch: bool, score_diff: float, is_ambiguous: bool).
             score_diff = score_shadow - score_active.
         """
         if len(s_active) < 2:
-            return False, 0.0
+            return False, 0.0, False
 
         is_ambig = self.check_collision(s_active, s_shadow)
         
@@ -196,8 +196,12 @@ class EvaluationEngine:
             should_switch = False
         else:
             should_switch = score_diff > delta
+            # Mark as ambiguous if it leans towards the target language 
+            # (score_diff > 0) but hasn't crossed the current dynamic delta threshold.
+            if not should_switch and score_diff > 0:
+                is_ambig = True
 
         self._log_decision(s_active, s_shadow, current_layout, on_delimiter, is_ambig, score_diff, should_switch)
 
-        return should_switch, score_diff
+        return should_switch, score_diff, is_ambig
 
