@@ -175,7 +175,7 @@ class HookManager:
         self.history_deque = collections.deque()
 
         self.is_correcting = False
-        self.pending_queue = collections.deque()
+        self.pending_queue = collections.deque(maxlen=100)
 
         self._hook_id = None
         self._hook_proc = None
