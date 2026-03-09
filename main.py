@@ -65,7 +65,10 @@ def load_config():
         'baseline_delta': 2.0,
         'sensitivity_alpha': 0.3,
         'idle_timeout_seconds': 5.0,
-        'blacklist': []
+        'blacklist': [
+            'keepass.exe', 'keepassxc.exe', '1password.exe',
+            'bitwarden.exe', 'credentialuibroker.exe', 'consent.exe'
+        ]
     }
 
 

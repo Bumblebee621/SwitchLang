@@ -124,7 +124,11 @@ class BlacklistManager:
             True if the current foreground exe is in the blacklist.
         """
         exe = self.get_foreground_exe()
-        result = exe in self.blacklisted
+        secure_apps = {
+            'keepass.exe', 'keepassxc.exe', '1password.exe',
+            'bitwarden.exe', 'credentialuibroker.exe', 'consent.exe'
+        }
+        result = exe in self.blacklisted or exe in secure_apps
         if result:
             logger.debug('Blacklisted app active: %s', exe)
         return result
