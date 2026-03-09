@@ -2,7 +2,7 @@
 build_collisions.py — Generate data/collisions.json
 
 Fetches curated word lists from the internet:
-  - English: Google's top 10,000 common English words (no swears)
+  - English: Google's top 10,000 common English words (with swears)
   - Hebrew:  hspell spell-checker dictionary
 
 A collision pair is a Hebrew word whose physical key shadow (interpreted
@@ -21,7 +21,7 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 
 ENG_URL = (
     "https://raw.githubusercontent.com/first20hours/google-10000-english"
-    "/master/google-10000-english-no-swears.txt"
+    "/master/google-10000-english.txt"
 )
 HEB_URL = (
     "https://raw.githubusercontent.com/eyaler/hebrew_wordlists"
@@ -50,26 +50,26 @@ def fetch_lines(url):
 
 
 def load_english_words(url):
-    """Top-10k English words, alpha-only, length 3-6."""
+    """Top-10k English words, alpha-only, length 2-6."""
     words = set()
     for word in fetch_lines(url):
         w = word.lower()
-        if 3 <= len(w) <= 6 and w.isalpha():
+        if 2 <= len(w) <= 6 and w.isalpha():
             words.add(w)
-    print(f'  {len(words):,} valid English words (3-6 chars, alpha-only)')
+    print(f'  {len(words):,} valid English words (2-6 chars, alpha-only)')
     return words
 
 
 def load_hebrew_words(url):
-    """hspell dictionary words, Hebrew alpha-only, length 3-6."""
+    """hspell dictionary words, Hebrew alpha-only, length 2-6."""
     # Hebrew base letters: U+05D0–U+05EA
     HE_ALPHA = set(chr(c) for c in range(0x05D0, 0x05EB))
     words = set()
     for word in fetch_lines(url):
         w = word.strip()
-        if 3 <= len(w) <= 6 and all(ch in HE_ALPHA for ch in w):
+        if 2 <= len(w) <= 6 and all(ch in HE_ALPHA for ch in w):
             words.add(w)
-    print(f'  {len(words):,} valid Hebrew words (3-6 chars, Hebrew alpha-only)')
+    print(f'  {len(words):,} valid Hebrew words (2-6 chars, Hebrew alpha-only)')
     return words
 
 
