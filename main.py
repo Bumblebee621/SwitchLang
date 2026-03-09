@@ -11,23 +11,28 @@ import logging.handlers
 import os
 import sys
 
-# Configure logging — DEBUG to file, INFO to console
+# Configure PyInstaller paths
+if getattr(sys, 'frozen', False):
+    BUNDLE_DIR = sys._MEIPASS
+    APP_DIR = os.path.dirname(sys.executable)
+else:
+    BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
+    APP_DIR = BUNDLE_DIR
+
+# Configure logging — INFO to file, INFO to console
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
     handlers=[
         logging.handlers.RotatingFileHandler(
-            os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                'switchlang.log'
-            ),
+            os.path.join(APP_DIR, 'switchlang.log'),
             mode='a', encoding='utf-8',
             maxBytes=5_000_000, backupCount=3
         ),
         logging.StreamHandler(sys.stdout)
     ]
 )
-logging.getLogger('switchlang.hooks').setLevel(logging.DEBUG)
+logging.getLogger('switchlang.hooks').setLevel(logging.INFO)
 logger = logging.getLogger('switchlang')
 
 from PyQt6.QtWidgets import QApplication
@@ -40,10 +45,9 @@ from core.hooks import HookManager
 from ui.tray import SystemTrayApp
 from ui.settings_window import SettingsWindow
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
-DATA_DIR = os.path.join(APP_DIR, 'data')
-STYLE_PATH = os.path.join(APP_DIR, 'ui', 'style.qss')
+DATA_DIR = os.path.join(BUNDLE_DIR, 'data')
+STYLE_PATH = os.path.join(BUNDLE_DIR, 'ui', 'style.qss')
 COLLISIONS_PATH = os.path.join(DATA_DIR, 'collisions.json')
 
 
