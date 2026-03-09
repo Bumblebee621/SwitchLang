@@ -115,6 +115,38 @@ class KBDLLHOOKSTRUCT(ctypes.Structure):
     ]
 
 
+class GUITHREADINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("flags", wintypes.DWORD),
+        ("hwndActive", wintypes.HWND),
+        ("hwndFocus", wintypes.HWND),
+        ("hwndCapture", wintypes.HWND),
+        ("hwndMenuOwner", wintypes.HWND),
+        ("hwndMoveSize", wintypes.HWND),
+        ("hwndCaret", wintypes.HWND),
+        ("rcCaret", wintypes.RECT)
+    ]
+
+_user32.GetGUIThreadInfo.argtypes = [wintypes.DWORD, ctypes.POINTER(GUITHREADINFO)]
+_user32.GetGUIThreadInfo.restype = wintypes.BOOL
+_user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+_user32.GetWindowLongW.restype = wintypes.LONG
+
+def is_password_field_active():
+    """Check if the currently focused control has the ES_PASSWORD style."""
+    gui_info = GUITHREADINFO(cbSize=ctypes.sizeof(GUITHREADINFO))
+    # 0 for the foreground thread
+    if _user32.GetGUIThreadInfo(0, ctypes.byref(gui_info)):
+        if gui_info.hwndFocus:
+            GWL_STYLE = -16
+            ES_PASSWORD = 0x0020
+            style = _user32.GetWindowLongW(gui_info.hwndFocus, GWL_STYLE)
+            if style & ES_PASSWORD:
+                return True
+    return False
+
+
 class HookManager:
     """Manages the global keyboard hook and mouse listener."""
 
@@ -254,17 +286,12 @@ class HookManager:
 
             if self.buffer_active:
                 current = self._cached_layout
-                should_switch, diff = self.engine.evaluate(
+                should_switch, diff, is_ambiguous = self.engine.evaluate(
                     self.buffer_active,
                     self.buffer_shadow,
                     self.sensitivity.delta,
                     current_layout=current,
                     on_delimiter=True
-                )
-
-                # Coalesce the evaluation and dictionary decision into one record
-                is_ambiguous = self.engine.check_collision(
-                    self.buffer_active, self.buffer_shadow
                 )
                 
                 logger.debug(
@@ -306,7 +333,7 @@ class HookManager:
             self.buffer_shadow += he_char
 
         if len(self.buffer_active) >= 3:
-            should_switch, diff = self.engine.evaluate(
+            should_switch, diff, is_ambig = self.engine.evaluate(
                 self.buffer_active,
                 self.buffer_shadow,
                 self.sensitivity.delta,
@@ -500,7 +527,13 @@ class HookManager:
                             self._clear_history()
                         self._cached_layout = new_layout
 
-                self._cached_blacklisted = self.blacklist.is_blacklisted()
+                is_blacklisted = self.blacklist.is_blacklisted()
+                if not is_blacklisted:
+                    try:
+                        is_blacklisted = is_password_field_active()
+                    except Exception as e:
+                        logger.debug('Error checking password field: %s', e)
+                self._cached_blacklisted = is_blacklisted
 
                 hwnd = user32.GetForegroundWindow()
                 if self.sensitivity.check_window_change(hwnd):
