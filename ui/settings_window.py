@@ -196,10 +196,24 @@ class SettingsWindow(QMainWindow):
         """
         if checked:
             self.status_label.setText('● Active')
-            self.status_label.setStyleSheet('color: #a6e3a1; font-weight: bold;')
+            self.status_label.setStyleSheet('''
+                color: #a6e3a1;
+                background-color: rgba(166, 227, 161, 0.15);
+                border: 1px solid rgba(166, 227, 161, 0.3);
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-weight: bold;
+            ''')
         else:
             self.status_label.setText('● Inactive')
-            self.status_label.setStyleSheet('color: #f38ba8; font-weight: bold;')
+            self.status_label.setStyleSheet('''
+                color: #f38ba8;
+                background-color: rgba(243, 139, 168, 0.15);
+                border: 1px solid rgba(243, 139, 168, 0.3);
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-weight: bold;
+            ''')
 
     def _update_delta_label(self, value):
         """Update the delta display when the slider moves."""
