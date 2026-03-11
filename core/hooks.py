@@ -191,6 +191,7 @@ class HookManager:
         # Cached values updated by polling thread, NOT in the hook
         self._cached_layout = 'en'
         self._cached_blacklisted = False
+        self._last_caps_lock = False
 
     def set_enabled(self, enabled):
         """Enable or disable the engine."""
@@ -255,8 +256,9 @@ class HookManager:
         Returns:
             True to block the key from the OS, False to pass through.
         """
+        caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
+
         if self.is_correcting:
-            caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
             if vk_code in DELIMITER_VKS:
                 self.pending_queue.append((vk_code, self._shift_pressed, caps_lock))
             else:
@@ -302,7 +304,6 @@ class HookManager:
                     self.sensitivity.delta, should_switch, is_ambiguous
                 )
 
-                caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
                 needs_caps_fix = current == 'he' and caps_lock and not should_switch
 
                 if should_switch or needs_caps_fix:
@@ -321,11 +322,9 @@ class HookManager:
             self._clear_buffers()
             return False
 
-        caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
         en_char, he_char = get_both_chars(vk_code, self._shift_pressed, caps_lock)
         if en_char is None:
             return False
-
 
         current = self._cached_layout
         if current == 'en':
@@ -350,7 +349,6 @@ class HookManager:
                 diff, self.sensitivity.delta, should_switch
             )
             
-            caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
             needs_caps_fix = current == 'he' and caps_lock and not should_switch
 
             if should_switch or needs_caps_fix:
@@ -558,9 +556,7 @@ class HookManager:
         """
         while self._running:
             try:
-                # Skip layout detection entirely while a switch is in progress
-                # to avoid a race where the poll overwrites _cached_layout with
-                # the old OS value before _do_switch has set the target.
+                # Detection of layout, window, or Caps Lock changes as Context Resumption Events
                 if not self.is_correcting:
                     new_layout = get_current_layout()
                     if new_layout != 'unknown':
@@ -573,6 +569,15 @@ class HookManager:
                             self._clear_buffers()
                             self._clear_history()
                         self._cached_layout = new_layout
+
+                    # Detect manual Caps Lock toggle
+                    caps_state = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
+                    if caps_state != self._last_caps_lock:
+                        logger.debug('Manual Caps Lock toggle detected — triggering CRE')
+                        self.sensitivity.reset(reason='manual_caps_toggle')
+                        self._clear_buffers()
+                        self._clear_history()
+                        self._last_caps_lock = caps_state
 
                 is_blacklisted = self.blacklist.is_blacklisted()
                 if not is_blacklisted:
@@ -608,9 +613,10 @@ class HookManager:
         """Start all hooks and polling threads."""
         self._running = True
 
-        # Initial layout detection
+        # Initial layout and caps state detection
         self._cached_layout = get_current_layout()
-        logger.info('Initial layout: %s', self._cached_layout)
+        self._last_caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
+        logger.info('Initial layout: %s, Caps Lock: %s', self._cached_layout, self._last_caps_lock)
 
         self._hook_thread = threading.Thread(
             target=self._hook_thread_func,

@@ -96,6 +96,12 @@ def shadow(text, direction='en_to_he'):
     return ''.join(mapping.get(ch, ch) for ch in text)
 
 
+def _get_effective_shift(vk_code, shifted, caps_lock):
+    """Calculate the effective shift state (accounting for Caps Lock XOR alpha)."""
+    is_alpha = 0x41 <= vk_code <= 0x5A
+    return shifted ^ caps_lock if is_alpha else shifted
+
+
 def vk_to_char(vk_code, shifted, layout='en', caps_lock=False):
     """Map a virtual key code to a character.
 
@@ -112,8 +118,7 @@ def vk_to_char(vk_code, shifted, layout='en', caps_lock=False):
     if vk_code == 0x0D: return '\n'
     if vk_code == 0x09: return '\t'
 
-    is_alpha = 0x41 <= vk_code <= 0x5A
-    effective_shift = shifted ^ caps_lock if is_alpha else shifted
+    effective_shift = _get_effective_shift(vk_code, shifted, caps_lock)
 
     table = VK_TO_CHARS_SHIFT if effective_shift else VK_TO_CHARS
     pair = table.get(vk_code)
@@ -134,8 +139,7 @@ def get_both_chars(vk_code, shifted, caps_lock=False):
     Returns:
         Tuple (en_char, he_char) or (None, None) if unmapped.
     """
-    is_alpha = 0x41 <= vk_code <= 0x5A
-    effective_shift = shifted ^ caps_lock if is_alpha else shifted
+    effective_shift = _get_effective_shift(vk_code, shifted, caps_lock)
 
     table = VK_TO_CHARS_SHIFT if effective_shift else VK_TO_CHARS
     pair = table.get(vk_code)
