@@ -25,7 +25,9 @@ INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004
 VK_BACK = 0x08
+VK_CAPITAL = 0x14
 WM_INPUTLANGCHANGEREQUEST = 0x0050
+KEYEVENTF_EXTENDEDKEY = 0x0001
 
 # Hebrew and English HKL handles
 HKL_EN_US = 0x04090409
@@ -97,6 +99,15 @@ def send_backspaces(count):
         inputs.append(_make_key_input(vk=VK_BACK, flags=KEYEVENTF_KEYUP))
     if inputs:
         _send_inputs(inputs)
+
+
+def toggle_caps_lock():
+    """Simulate a Caps Lock key press to toggle its state."""
+    inputs = [
+        _make_key_input(vk=VK_CAPITAL, flags=KEYEVENTF_EXTENDEDKEY),
+        _make_key_input(vk=VK_CAPITAL, flags=KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP)
+    ]
+    _send_inputs(inputs)
 
 
 def send_unicode_string(text):
@@ -212,13 +223,14 @@ def get_current_layout():
 
 def execute_switch(buffer_active, buffer_shadow,
                    pending_queue, set_correcting, target_layout,
-                   correction_block=None, trigger_delimiter=None):
+                   correction_block=None, trigger_delimiter=None,
+                   fix_caps=False):
     """Execute the full concurrency-safe layout correction sequence.
 
     Steps:
       1. Enter lock state (is_correcting = True).
       2. Erase the incorrect text (current word + any retroactive block).
-      3. Toggle the OS keyboard layout.
+      3. Toggle the OS keyboard layout (if needed) or Caps Lock.
       4. Inject the full corrected text.
       5. Flush any keys typed during correction.
       6. Release lock state.
@@ -226,7 +238,7 @@ def execute_switch(buffer_active, buffer_shadow,
     Args:
         buffer_active: The incorrectly typed trigger word to erase.
         buffer_shadow: The shadow translation of the trigger word.
-        pending_queue: collections.deque of (vk_code, shifted) tuples
+        pending_queue: collections.deque of (vk_code, shifted, caps_lock) tuples
                        from keys pressed during correction.
         set_correcting: Callable(bool) to set/clear the lock flag.
         target_layout: 'en' or 'he' — the layout to switch TO.
@@ -236,6 +248,7 @@ def execute_switch(buffer_active, buffer_shadow,
         trigger_delimiter: The delimiter char (e.g. ' ') that was passed
                            through to the app before the switch thread ran,
                            or None for mid-word triggers.
+        fix_caps: If True, toggle Caps Lock off during the correction.
     """
     set_correcting(True)
 
@@ -285,20 +298,25 @@ def execute_switch(buffer_active, buffer_shadow,
         send_backspaces(erase_len)
         time.sleep(0.005)
 
-        toggle_layout(target_layout)
+        if fix_caps:
+            toggle_caps_lock()
+            time.sleep(0.005)
+
+        current_layout = get_current_layout()
+        if target_layout != current_layout:
+            toggle_layout(target_layout)
 
         send_unicode_string(inject_text)
         time.sleep(0.005)
         # Inject pending queue
         text_to_inject = ""
         while pending_queue:
-            q_vk, q_shift = pending_queue.popleft()
-            
+            q_vk, q_shift, q_caps = pending_queue.popleft()
+
             # Map the raw typed key to a character in the TARGET layout.
-            ch = vk_to_char(q_vk, q_shift, layout=target_layout)
+            ch = vk_to_char(q_vk, q_shift, layout=target_layout, caps_lock=q_caps)
             if ch:
                 text_to_inject += ch
-
         if text_to_inject:
             send_unicode_string(text_to_inject)
     finally:

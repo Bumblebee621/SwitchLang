@@ -51,6 +51,7 @@ VK_RETURN = 0x0D
 VK_SPACE = 0x20
 VK_BACK = 0x08
 VK_TAB = 0x09
+VK_CAPITAL = 0x14
 
 MODIFIER_VKS = {
     VK_SHIFT, VK_LSHIFT, VK_RSHIFT,
@@ -255,12 +256,13 @@ class HookManager:
             True to block the key from the OS, False to pass through.
         """
         if self.is_correcting:
+            caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
             if vk_code in DELIMITER_VKS:
-                self.pending_queue.append((vk_code, self._shift_pressed))
+                self.pending_queue.append((vk_code, self._shift_pressed, caps_lock))
             else:
-                en_ch, he_ch = get_both_chars(vk_code, self._shift_pressed)
+                en_ch, he_ch = get_both_chars(vk_code, self._shift_pressed, caps_lock)
                 if en_ch is not None:
-                    self.pending_queue.append((vk_code, self._shift_pressed))
+                    self.pending_queue.append((vk_code, self._shift_pressed, caps_lock))
             return True
 
         if not self.enabled:
@@ -300,11 +302,14 @@ class HookManager:
                     self.sensitivity.delta, should_switch, is_ambiguous
                 )
 
-                if should_switch:
-                    self._trigger_switch(delimiter_char=delimiter_char)
-                    return True
+                caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
+                needs_caps_fix = current == 'he' and caps_lock and not should_switch
 
-                # Word is not a switch trigger — record it in history.
+                if should_switch or needs_caps_fix:
+                    if self._trigger_switch(delimiter_char=delimiter_char, force_target=current if needs_caps_fix else None):
+                        return True
+
+                # Word is not a switch trigger (or switch was aborted) — record it in history.
                 self.history_deque.append(_WordEntry(
                     active=self.buffer_active,
                     shadow=self.buffer_shadow,
@@ -316,7 +321,8 @@ class HookManager:
             self._clear_buffers()
             return False
 
-        en_char, he_char = get_both_chars(vk_code, self._shift_pressed)
+        caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
+        en_char, he_char = get_both_chars(vk_code, self._shift_pressed, caps_lock)
         if en_char is None:
             return False
 
@@ -343,30 +349,57 @@ class HookManager:
                 'Eval: diff=%.2f delta=%.2f switch=%s',
                 diff, self.sensitivity.delta, should_switch
             )
-            if should_switch:
-                self._trigger_switch()
-                return True
+            
+            caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
+            needs_caps_fix = current == 'he' and caps_lock and not should_switch
+
+            if should_switch or needs_caps_fix:
+                if self._trigger_switch(force_target=current if needs_caps_fix else None):
+                    return True
 
         return False
 
-    def _trigger_switch(self, delimiter_char=None):
+    def _trigger_switch(self, delimiter_char=None, force_target=None):
         """Initiate the layout correction sequence.
 
         Args:
             delimiter_char: The delimiter character that triggered the switch
                 (space, newline, tab), or None for mid-word triggers. Used to
                 calculate the exact number of backspaces needed.
+            force_target: The layout to switch to. If None, it will be the opposite
+                of the current layout.
+
+        Returns:
+            True if a switch was initiated, False if it was aborted.
         """
         current = self._cached_layout
-        target = 'he' if current == 'en' else 'en'
+        target = force_target if force_target is not None else ('he' if current == 'en' else 'en')
+        fix_caps = False
 
         # Build the retroactive correction block BEFORE clearing history.
         correction_block = self._build_correction_block()
 
+        # Handle Caps Lock quirk: typing in Hebrew with Caps Lock ON produces English chars.
+        # Engine will evaluate the intended Hebrew correctly because keymap is reverted.
+        # s_active is Hebrew (intended), s_shadow is English (what's on screen).
+        caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
+        if current == 'he' and caps_lock:
+            # Re-evaluate the logic: if engine says target is English, it means the 
+            # user's intent is English (like typing "HELLO"). Per user instructions, 
+            # we do NOTHING in this case.
+            if target == 'en':
+                logger.debug('English intent detected in Hebrew layout with Caps Lock ON - ignoring switch')
+                return False
+
+            # If target is still Hebrew, it means the user intended Hebrew (like "לא")
+            # but Caps Lock was forcing English. We stay in Hebrew but fix Caps.
+            target = 'he'
+            fix_caps = True
+
         logger.info(
-            'SWITCHING: "%s" -> "%s" (layout %s -> %s) lookback=%d words',
+            'SWITCHING: "%s" -> "%s" (layout %s -> %s, fix_caps=%s) lookback=%d words',
             self.buffer_active, self.buffer_shadow, current, target,
-            len(correction_block)
+            fix_caps, len(correction_block)
         )
 
         buf_active = self.buffer_active
@@ -374,19 +407,32 @@ class HookManager:
         self._clear_buffers()
         self._clear_history()  # context ends here
 
+        if fix_caps:
+            # When fixing Caps Lock without changing layout, the intended text is 
+            # already in buf_active, and the incorrectly outputted text on screen 
+            # corresponds to buf_shadow. By swapping them, the switcher will erase 
+            # the correct number of characters (from shadow) and inject the intended text.
+            buf_active, buf_shadow = buf_shadow, buf_active
+            correction_block = [
+                _WordEntry(active=e.shadow, shadow=e.active, delimiter=e.delimiter, is_ambiguous=e.is_ambiguous)
+                for e in correction_block
+            ]
+
         # Synchronously lock OS passthrough before thread spins up
         self._set_correcting(True)
 
         switch_thread = threading.Thread(
             target=self._do_switch,
-            args=(buf_active, buf_shadow, target, correction_block, delimiter_char),
+            args=(buf_active, buf_shadow, target, correction_block, delimiter_char, fix_caps),
             daemon=True,
             name='SwitchThread'
         )
         switch_thread.start()
+        return True
 
     def _do_switch(self, buf_active, buf_shadow, target,
-                   correction_block=None, trigger_delimiter=None):
+                   correction_block=None, trigger_delimiter=None,
+                   fix_caps=False):
         """Run the switch on a separate thread to avoid blocking
         the hook callback."""
         execute_switch(
@@ -397,6 +443,7 @@ class HookManager:
             target,
             correction_block=correction_block,
             trigger_delimiter=trigger_delimiter,
+            fix_caps=fix_caps,
         )
 
         self._cached_layout = target

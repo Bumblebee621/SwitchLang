@@ -96,13 +96,14 @@ def shadow(text, direction='en_to_he'):
     return ''.join(mapping.get(ch, ch) for ch in text)
 
 
-def vk_to_char(vk_code, shifted, layout='en'):
+def vk_to_char(vk_code, shifted, layout='en', caps_lock=False):
     """Map a virtual key code to a character.
 
     Args:
         vk_code: Windows virtual key code (e.g. 0x41 for 'A').
         shifted: Whether Shift is held.
         layout: 'en' or 'he' — which character to return.
+        caps_lock: Whether Caps Lock is on.
 
     Returns:
         The character string, or None if unmapped.
@@ -111,25 +112,34 @@ def vk_to_char(vk_code, shifted, layout='en'):
     if vk_code == 0x0D: return '\n'
     if vk_code == 0x09: return '\t'
 
-    table = VK_TO_CHARS_SHIFT if shifted else VK_TO_CHARS
+    is_alpha = 0x41 <= vk_code <= 0x5A
+    effective_shift = shifted ^ caps_lock if is_alpha else shifted
+
+    table = VK_TO_CHARS_SHIFT if effective_shift else VK_TO_CHARS
     pair = table.get(vk_code)
     if pair is None:
         return None
+        
     return pair[0] if layout == 'en' else pair[1]
 
 
-def get_both_chars(vk_code, shifted):
+def get_both_chars(vk_code, shifted, caps_lock=False):
     """Get both EN and HE characters for a virtual key code.
 
     Args:
         vk_code: Windows virtual key code.
         shifted: Whether Shift is held.
+        caps_lock: Whether Caps Lock is on.
 
     Returns:
         Tuple (en_char, he_char) or (None, None) if unmapped.
     """
-    table = VK_TO_CHARS_SHIFT if shifted else VK_TO_CHARS
+    is_alpha = 0x41 <= vk_code <= 0x5A
+    effective_shift = shifted ^ caps_lock if is_alpha else shifted
+
+    table = VK_TO_CHARS_SHIFT if effective_shift else VK_TO_CHARS
     pair = table.get(vk_code)
     if pair is None:
         return (None, None)
+        
     return pair
