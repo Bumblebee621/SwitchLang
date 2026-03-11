@@ -29,7 +29,7 @@ class SettingsWindow(QMainWindow):
         self._fg_timer = None
 
         self.setWindowTitle('SwitchLang — Settings')
-        self.setFixedSize(520, 560)
+        self.setMinimumSize(520, 560)
         self.setWindowFlags(
             Qt.WindowType.WindowCloseButtonHint
             | Qt.WindowType.WindowMinimizeButtonHint
@@ -67,14 +67,6 @@ class SettingsWindow(QMainWindow):
         tabs.addTab(self._build_blacklist_tab(), 'Blacklist')
         layout.addWidget(tabs)
 
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        save_btn = QPushButton('Save')
-        save_btn.setObjectName('primary_button')
-        save_btn.setFixedWidth(100)
-        save_btn.clicked.connect(self._save_config)
-        btn_row.addWidget(save_btn)
-        layout.addLayout(btn_row)
 
     def _build_general_tab(self):
         """Build the General settings tab."""
@@ -92,6 +84,7 @@ class SettingsWindow(QMainWindow):
         self.status_label = QLabel('Active')
         self.status_label.setObjectName('status_active')
         self.enable_check.toggled.connect(self._update_status_label)
+        self.enable_check.toggled.connect(self._apply_settings)
         eg_layout.addWidget(self.status_label)
 
         layout.addWidget(enable_group)
@@ -116,6 +109,9 @@ class SettingsWindow(QMainWindow):
         )
         self.sensitivity_slider.valueChanged.connect(
             self._update_delta_label
+        )
+        self.sensitivity_slider.valueChanged.connect(
+            self._apply_settings
         )
         slider_row.addWidget(self.sensitivity_slider)
 
@@ -238,8 +234,8 @@ class SettingsWindow(QMainWindow):
         for exe in self.blacklist_manager.get_list():
             self.blacklist_widget.addItem(exe)
 
-    def _save_config(self):
-        """Save current UI state to config.json and emit signal."""
+    def _apply_settings(self):
+        """Save current UI state to config.json and emit signal automatically."""
         data = {}
         if os.path.exists(self.config_path):
             try:
@@ -255,6 +251,10 @@ class SettingsWindow(QMainWindow):
             json.dump(data, f, indent=4, ensure_ascii=False)
 
         self.settings_changed.emit(data)
+
+    def _save_config(self):
+        """Deprecated: Use _apply_settings instead."""
+        self._apply_settings()
         self.close()
 
     def _add_exe(self):

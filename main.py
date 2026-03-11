@@ -60,7 +60,7 @@ from PyQt6.QtWidgets import QApplication
 from core.trigram import load_models
 from core.engine import EvaluationEngine
 from core.sensitivity import SensitivityManager
-from core.blacklist import BlacklistManager
+from core.blacklist import BlacklistManager, DEFAULT_BLACKLIST
 from core.hooks import HookManager
 from ui.tray import SystemTrayApp
 from ui.settings_window import SettingsWindow
@@ -85,10 +85,7 @@ def load_config():
         'baseline_delta': 2.0,
         'sensitivity_alpha': 0.3,
         'idle_timeout_seconds': 5.0,
-        'blacklist': [
-            'keepass.exe', 'keepassxc.exe', '1password.exe',
-            'bitwarden.exe', 'credentialuibroker.exe', 'consent.exe'
-        ]
+        'blacklist': sorted(list(DEFAULT_BLACKLIST))
     }
 
 

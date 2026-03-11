@@ -19,6 +19,11 @@ logger = logging.getLogger('switchlang.blacklist')
 
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
+DEFAULT_BLACKLIST = {
+    'keepass.exe', 'keepassxc.exe', '1password.exe',
+    'bitwarden.exe', 'credentialuibroker.exe', 'consent.exe'
+}
+
 
 class BlacklistManager:
     """Manages the set of blacklisted exe names."""
@@ -39,12 +44,17 @@ class BlacklistManager:
             try:
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                self.blacklisted = set(
-                    exe.lower() for exe in data.get('blacklist', [])
-                )
+                user_blacklist = data.get('blacklist', [])
+                self.blacklisted = set(exe.lower() for exe in user_blacklist)
+                # If first time or empty, ensure defaults are added
+                if not self.blacklisted and not user_blacklist:
+                    self.blacklisted.update(DEFAULT_BLACKLIST)
             except json.JSONDecodeError:
-                logger.error('Malformed config file: %s — blacklist not loaded',
+                logger.error('Malformed config file: %s — using default blacklist',
                              self.config_path)
+                self.blacklisted = set(DEFAULT_BLACKLIST)
+        else:
+            self.blacklisted = set(DEFAULT_BLACKLIST)
 
     def save(self):
         """Persist the current blacklist to config.json."""
@@ -124,11 +134,7 @@ class BlacklistManager:
             True if the current foreground exe is in the blacklist.
         """
         exe = self.get_foreground_exe()
-        secure_apps = {
-            'keepass.exe', 'keepassxc.exe', '1password.exe',
-            'bitwarden.exe', 'credentialuibroker.exe', 'consent.exe'
-        }
-        result = exe in self.blacklisted or exe in secure_apps
+        result = exe in self.blacklisted
         if result:
             logger.debug('Blacklisted app active: %s', exe)
         return result

@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('data', 'data'), ('ui', 'ui')],
+    datas=[('C:\\Users\\Ariel\\Documents\\Antigravity\\SwitchLang\\data', 'data'), ('C:\\Users\\Ariel\\Documents\\Antigravity\\SwitchLang\\ui', 'ui')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
