@@ -13,6 +13,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont
 
+from core.startup import is_startup_enabled, set_startup_enabled
+
 
 class SettingsWindow(QMainWindow):
     """Settings window accessible from the system tray."""
@@ -86,6 +88,12 @@ class SettingsWindow(QMainWindow):
         self.enable_check.toggled.connect(self._update_status_label)
         self.enable_check.toggled.connect(self._apply_settings)
         eg_layout.addWidget(self.status_label)
+
+        self.startup_check = QCheckBox('Launch SwitchLang on startup')
+        self.startup_check.setFont(QFont('Segoe UI', 11))
+        self.startup_check.setChecked(is_startup_enabled())
+        self.startup_check.toggled.connect(self._toggle_startup)
+        eg_layout.addWidget(self.startup_check)
 
         layout.addWidget(enable_group)
 
@@ -233,6 +241,10 @@ class SettingsWindow(QMainWindow):
         self.blacklist_widget.clear()
         for exe in self.blacklist_manager.get_list():
             self.blacklist_widget.addItem(exe)
+
+    def _toggle_startup(self, checked):
+        """Toggle the application's launch on startup setting."""
+        set_startup_enabled(checked)
 
     def _apply_settings(self):
         """Save current UI state to config.json and emit signal automatically."""
