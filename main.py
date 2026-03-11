@@ -10,6 +10,7 @@ import logging
 import logging.handlers
 import os
 import sys
+from collections import deque
 
 # Configure PyInstaller paths
 if getattr(sys, 'frozen', False):
@@ -19,15 +20,34 @@ else:
     BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
     APP_DIR = BUNDLE_DIR
 
+class LineRotatingFileHandler(logging.Handler):
+    """A log handler that limits the file to a maximum number of lines."""
+    def __init__(self, filename, max_lines=1000, encoding='utf-8'):
+        super().__init__()
+        self.filename = filename
+        self.encoding = encoding
+        self.lines = deque(maxlen=max_lines)
+        if os.path.exists(self.filename):
+            with open(self.filename, 'r', encoding=self.encoding) as f:
+                self.lines.extend(f.readlines())
+                
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            self.lines.append(msg + '\n')
+            with open(self.filename, 'w', encoding=self.encoding) as f:
+                f.writelines(self.lines)
+        except Exception:
+            self.handleError(record)
+
 # Configure logging — INFO to file, INFO to console
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
     handlers=[
-        logging.handlers.RotatingFileHandler(
+        LineRotatingFileHandler(
             os.path.join(APP_DIR, 'switchlang.log'),
-            mode='a', encoding='utf-8',
-            maxBytes=5_000_000, backupCount=3
+            max_lines=1000, encoding='utf-8'
         ),
         logging.StreamHandler(sys.stdout)
     ]
