@@ -1,8 +1,15 @@
 """
 hooks.py — Low-level keyboard hook (WH_KEYBOARD_LL) and mouse listener.
 
-Intercepts keystrokes, maintains dual-layout buffers, triggers the
-evaluation engine, and blocks physical input during correction phases.
+This module is the "sensory system" of SwitchLang. It uses Windows Hooks to
+intercept every physical keystroke, processes them through an N-gram evaluation
+pipeline, and triggers layout corrections when gibberish is detected.
+
+KEY CONCEPTS:
+- Low-Level Hook: Intercepts keys before the OS or other apps see them.
+- Shadow Buffer: Keeps track of what the keys WOULD be in the other layout.
+- Context Resumption Event (CRE): Resets buffers and sensitivity when the
+  user switches windows, clicks the mouse, or stays idle, signaling a "fresh start".
 """
 
 import ctypes
@@ -18,6 +25,10 @@ from core.keymap import get_both_chars
 from core.switcher import execute_switch, get_current_layout
 
 logger = logging.getLogger('switchlang.hooks')
+
+# =============================================================================
+# SECTION 1: WINDOWS API DEFINITIONS (ctypes)
+# =============================================================================
 
 # Dedicated user32 with use_last_error=True (separate from
 # ctypes.windll.user32 which may be modified by PyQt6/pynput)
@@ -35,9 +46,10 @@ WM_SYSKEYDOWN = 0x0104
 HC_ACTION = 0
 
 # Flag to detect injected keys (bit 4 in KBDLLHOOKSTRUCT.flags)
+# We use this to avoid infinite loops when we re-inject corrected characters.
 LLKHF_INJECTED = 0x00000010
 
-# Modifier VK codes
+# Virtual Key (VK) Constants
 VK_SHIFT = 0x10
 VK_LSHIFT = 0xA0
 VK_RSHIFT = 0xA1
@@ -59,12 +71,11 @@ MODIFIER_VKS = {
     VK_MENU, VK_LMENU, VK_RMENU,
 }
 
+# Delimiters trigger word-level evaluation
 DELIMITER_VKS = {VK_SPACE, VK_RETURN, VK_TAB}
-
-# Maps delimiter VK codes to their actual characters for re-injection
 DELIMITER_CHARS = {VK_SPACE: ' ', VK_RETURN: '\n', VK_TAB: '\t'}
 
-# Stores a completed word and its metadata for retroactive correction
+# Stores a completed word and its metadata for retroactive correction (Lookback)
 _WordEntry = collections.namedtuple(
     '_WordEntry', ['active', 'shadow', 'delimiter', 'is_ambiguous']
 )
@@ -78,7 +89,7 @@ HOOKPROC = ctypes.WINFUNCTYPE(
     wintypes.LPARAM
 )
 
-# Set argtypes/restype on our DEDICATED instance
+# Set argtypes/restype for the Windows Hook functions
 _user32.SetWindowsHookExW.argtypes = [
     ctypes.c_int, HOOKPROC, wintypes.HINSTANCE, wintypes.DWORD
 ]
@@ -107,6 +118,7 @@ _user32.PostThreadMessageW.argtypes = [
 
 
 class KBDLLHOOKSTRUCT(ctypes.Structure):
+    """Low-level keyboard hook structure from Windows API."""
     _fields_ = [
         ('vkCode', wintypes.DWORD),
         ('scanCode', wintypes.DWORD),
@@ -117,6 +129,7 @@ class KBDLLHOOKSTRUCT(ctypes.Structure):
 
 
 class GUITHREADINFO(ctypes.Structure):
+    """GUI thread information used to detect focused control properties."""
     _fields_ = [
         ("cbSize", wintypes.DWORD),
         ("flags", wintypes.DWORD),
@@ -134,8 +147,16 @@ _user32.GetGUIThreadInfo.restype = wintypes.BOOL
 _user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
 _user32.GetWindowLongW.restype = wintypes.LONG
 
+# =============================================================================
+# SECTION 2: UI AUTOMATION HELPERS
+# =============================================================================
+
 def is_password_field_active():
-    """Check if the currently focused control has the ES_PASSWORD style."""
+    """Safety check: detects if the user is currently typing in a password field.
+    
+    Returns:
+        True if the currently focused window control has the ES_PASSWORD style.
+    """
     gui_info = GUITHREADINFO(cbSize=ctypes.sizeof(GUITHREADINFO))
     # 0 for the foreground thread
     if _user32.GetGUIThreadInfo(0, ctypes.byref(gui_info)):
@@ -148,17 +169,25 @@ def is_password_field_active():
     return False
 
 
+# =============================================================================
+# SECTION 3: MAIN HOOK MANAGER
+# =============================================================================
+
 class HookManager:
-    """Manages the global keyboard hook and mouse listener."""
+    """Manages the global keyboard hook and supporting listener threads.
+    
+    This class handles the state machine for the "Evaluation Pipeline". 
+    It captures keystrokes, builds words, and triggers corrections.
+    """
 
     def __init__(self, engine, sensitivity, blacklist, config):
         """Initialize the hook manager.
 
         Args:
-            engine: EvaluationEngine instance.
-            sensitivity: SensitivityManager instance.
-            blacklist: BlacklistManager instance.
-            config: Dict of configuration values.
+            engine: EvaluationEngine instance for scoring words.
+            sensitivity: SensitivityManager instance for dynamic thresholds.
+            blacklist: BlacklistManager instance for app-specific disabling.
+            config: Dict of configuration values from config.json.
         """
         self.engine = engine
         self.sensitivity = sensitivity
@@ -168,14 +197,17 @@ class HookManager:
         self.enabled = config.get('enabled', True)
         self.idle_timeout = config.get('idle_timeout_seconds', 15.0)
 
-        self.buffer_active = ''
-        self.buffer_shadow = ''
+        # Buffers for the current partial word
+        self.buffer_active = ''  # What shows on screen right now
+        self.buffer_shadow = ''  # The same keys translated to the other layout
 
         # Lookback queue: stores _WordEntry items for completed words in the
-        # current CRE session. Cleared on every CRE and after every switch.
+        # current session. Used for "Retroactive Correction" of ambiguous words.
         self.history_deque = collections.deque()
 
+        # Concurrency Lock: True when the switcher thread is erasing/re-injecting text.
         self.is_correcting = False
+        # Buffer for keys the user types *while* the switch is happening.
         self.pending_queue = collections.deque(maxlen=100)
 
         self._hook_id = None
@@ -188,47 +220,47 @@ class HookManager:
         self._ctrl_pressed = False
         self._on_switch_callback = None
 
-        # Cached values updated by polling thread, NOT in the hook
+        # PERFORMANCE optimization: Cache expensive Windows API results.
+        # These are updated on a slow 100ms polling thread.
         self._cached_layout = 'en'
         self._cached_blacklisted = False
-        self._last_caps_lock = False
 
     def set_enabled(self, enabled):
-        """Enable or disable the engine."""
+        """Enable or disable the engine logic (tray-accessible)."""
         self.enabled = enabled
         logger.info('Engine %s', 'enabled' if enabled else 'disabled')
 
     def set_on_switch_callback(self, callback):
-        """Set a callback for when a switch occurs."""
+        """Set a callback for when a layout switch occurs (e.g. for UI sounds)."""
         self._on_switch_callback = callback
 
     def _set_correcting(self, val):
-        """Set the correction lock flag."""
+        """Internal lock flag setter used by the Switcher thread."""
         self.is_correcting = val
 
     def _clear_buffers(self):
-        """Clear both layout buffers (word-level only)."""
+        """Clear the current word buffers (usually on word completion or CRE)."""
         self.buffer_active = ''
         self.buffer_shadow = ''
 
     def _clear_history(self):
-        """Clear the CRE-scoped word history deque.
-
-        Called on every Context Resumption Event and after every switch
-        to prevent retroactive corrections from crossing context boundaries.
+        """Clear the lookback history.
+        
+        CRITICAL: This is called on every Context Resumption Event (CRE) to
+        prevent retroactive corrections from jumping across windows or clicks.
         """
         if self.history_deque:
             logger.debug('Clearing history deque (%d entries)', len(self.history_deque))
         self.history_deque.clear()
 
     def _build_correction_block(self):
-        """Collect the contiguous ambiguous words from the tail of the history.
-
-        Walks backward from the most recent word, gathering all entries where
-        is_ambiguous=True. Stops at the first non-ambiguous word.
+        """Collect contiguous ambiguous words from the recent history.
+        
+        This enables "delayed detection": if the engine realizes after 3 words
+        that you've been in the wrong layout, it can fix all 3 words at once.
 
         Returns:
-            List of _WordEntry in chronological order (oldest first).
+            List of _WordEntry items in chronological order.
         """
         block = []
         for entry in reversed(self.history_deque):
@@ -243,48 +275,55 @@ class HookManager:
             )
         return block
 
-    def _handle_keypress(self, vk_code):
-        """Process a single keypress through the evaluation pipeline.
+    # -------------------------------------------------------------------------
+    # PIPELINE CORE: HANDLE KEYPRESS
+    # -------------------------------------------------------------------------
 
-        IMPORTANT: This runs inside the LL hook callback. It must be
-        fast — no Windows API calls here. We use cached values for
-        layout and blacklist status.
+    def _handle_keypress(self, vk_code):
+        """Process a single physical keypress through the evaluation pipeline.
+        
+        HOT PATH: This runs inside the OS low-level hook callback.
+        Speed is critical. No I/O or slow API calls here.
 
         Args:
             vk_code: The virtual key code of the pressed key.
 
         Returns:
-            True to block the key from the OS, False to pass through.
+            True to BLOCK the key from reaching the target application.
+            False to let the key pass through normally.
         """
-        caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
-
+        # 1. While a correction switch is happening, intercept and queue all typing.
         if self.is_correcting:
+            caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
             if vk_code in DELIMITER_VKS:
                 self.pending_queue.append((vk_code, self._shift_pressed, caps_lock))
             else:
                 en_ch, he_ch = get_both_chars(vk_code, self._shift_pressed, caps_lock)
                 if en_ch is not None:
                     self.pending_queue.append((vk_code, self._shift_pressed, caps_lock))
-            return True
+            return True # Block keys so they don't interleave with correction injection.
 
+        # 2. Skip logic if global disable, blacklist, or modifier combos (Ctrl+C)
         if not self.enabled:
             return False
 
         if self._cached_blacklisted:
             return False
 
-        # Skip if Ctrl is held (user is doing Ctrl+C etc.)
         if self._ctrl_pressed:
             return False
 
+        # Reset sensitivity timer on every active keystroke
         self.sensitivity.record_keystroke()
 
+        # 3. Handle Backspace (undo last buffer entry)
         if vk_code == VK_BACK:
             if self.buffer_active:
                 self.buffer_active = self.buffer_active[:-1]
                 self.buffer_shadow = self.buffer_shadow[:-1]
             return False
 
+        # 4. Handle Delimiters (Space, Enter, Tab) — TRIGGER TIER 1 EVALUATION
         if vk_code in DELIMITER_VKS:
             delimiter_char = DELIMITER_CHARS.get(vk_code, ' ')
 
@@ -304,13 +343,15 @@ class HookManager:
                     self.sensitivity.delta, should_switch, is_ambiguous
                 )
 
+                # Special Case: Hebrew + Caps Lock = Incorrect English.
+                caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
                 needs_caps_fix = current == 'he' and caps_lock and not should_switch
 
                 if should_switch or needs_caps_fix:
                     if self._trigger_switch(delimiter_char=delimiter_char, force_target=current if needs_caps_fix else None):
                         return True
 
-                # Word is not a switch trigger (or switch was aborted) — record it in history.
+                # Not a switch? Store word for potential future retroactive correction.
                 self.history_deque.append(_WordEntry(
                     active=self.buffer_active,
                     shadow=self.buffer_shadow,
@@ -322,6 +363,8 @@ class HookManager:
             self._clear_buffers()
             return False
 
+        # 5. Process Regular Character — TRIGGER TIER 2 EVALUATION (Mid-word)
+        caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
         en_char, he_char = get_both_chars(vk_code, self._shift_pressed, caps_lock)
         if en_char is None:
             return False
@@ -337,6 +380,7 @@ class HookManager:
             self.buffer_active += en_char
             self.buffer_shadow += he_char
 
+        # Only run mid-word scoring after 3+ characters to avoid false switches.
         if len(self.buffer_active) >= 3:
             should_switch, diff, is_ambig = self.engine.evaluate(
                 self.buffer_active,
@@ -349,6 +393,7 @@ class HookManager:
                 diff, self.sensitivity.delta, should_switch
             )
             
+            caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
             needs_caps_fix = current == 'he' and caps_lock and not should_switch
 
             if should_switch or needs_caps_fix:
@@ -358,41 +403,33 @@ class HookManager:
         return False
 
     def _trigger_switch(self, delimiter_char=None, force_target=None):
-        """Initiate the layout correction sequence.
-
+        """Prepare metadata and launch the async Switcher thread.
+        
         Args:
-            delimiter_char: The delimiter character that triggered the switch
-                (space, newline, tab), or None for mid-word triggers. Used to
-                calculate the exact number of backspaces needed.
-            force_target: The layout to switch to. If None, it will be the opposite
-                of the current layout.
-
+            delimiter_char: Delimiter that triggered the switch, if any.
+            force_target: Target layout override (used for Caps Lock fix).
+            
         Returns:
-            True if a switch was initiated, False if it was aborted.
+            True if a switch sequence was officially started.
         """
         current = self._cached_layout
         target = force_target if force_target is not None else ('he' if current == 'en' else 'en')
         fix_caps = False
 
-        # Build the retroactive correction block BEFORE clearing history.
-        correction_block = self._build_correction_block()
-
-        # Handle Caps Lock quirk: typing in Hebrew with Caps Lock ON produces English chars.
-        # Engine will evaluate the intended Hebrew correctly because keymap is reverted.
-        # s_active is Hebrew (intended), s_shadow is English (what's on screen).
+        # 1. Determine if we are just fixing Caps Lock within the same layout.
         caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
         if current == 'he' and caps_lock:
-            # Re-evaluate the logic: if engine says target is English, it means the 
-            # user's intent is English (like typing "HELLO"). Per user instructions, 
-            # we do NOTHING in this case.
             if target == 'en':
+                # User intended English (HEB+CAPS=ENG). Per spec, we allow this manually.
                 logger.debug('English intent detected in Hebrew layout with Caps Lock ON - ignoring switch')
                 return False
 
-            # If target is still Hebrew, it means the user intended Hebrew (like "לא")
-            # but Caps Lock was forcing English. We stay in Hebrew but fix Caps.
+            # User intended Hebrew but Caps was on. Stay in Hebrew, but fix Caps Lock.
             target = 'he'
             fix_caps = True
+
+        # 2. Build the lookback correction block BEFORE clearing history.
+        correction_block = self._build_correction_block()
 
         logger.info(
             'SWITCHING: "%s" -> "%s" (layout %s -> %s, fix_caps=%s) lookback=%d words',
@@ -402,23 +439,21 @@ class HookManager:
 
         buf_active = self.buffer_active
         buf_shadow = self.buffer_shadow
+        
+        # 3. Clean up manager state before handing off to the thread.
         self._clear_buffers()
-        self._clear_history()  # context ends here
+        self._clear_history()
 
         if fix_caps:
-            # When fixing Caps Lock without changing layout, the intended text is 
-            # already in buf_active, and the incorrectly outputted text on screen 
-            # corresponds to buf_shadow. By swapping them, the switcher will erase 
-            # the correct number of characters (from shadow) and inject the intended text.
+            # Swap buffers so switcher erases the "bad" English and injects "intended" Hebrew.
             buf_active, buf_shadow = buf_shadow, buf_active
             correction_block = [
                 _WordEntry(active=e.shadow, shadow=e.active, delimiter=e.delimiter, is_ambiguous=e.is_ambiguous)
                 for e in correction_block
             ]
 
-        # Synchronously lock OS passthrough before thread spins up
+        # 4. Lock the main hook (synchronously) and spin up the heavy-lifter thread.
         self._set_correcting(True)
-
         switch_thread = threading.Thread(
             target=self._do_switch,
             args=(buf_active, buf_shadow, target, correction_block, delimiter_char, fix_caps),
@@ -431,8 +466,7 @@ class HookManager:
     def _do_switch(self, buf_active, buf_shadow, target,
                    correction_block=None, trigger_delimiter=None,
                    fix_caps=False):
-        """Run the switch on a separate thread to avoid blocking
-        the hook callback."""
+        """Background thread worker to execute the erase/toggle/inject sequence."""
         execute_switch(
             buf_active,
             buf_shadow,
@@ -444,14 +478,23 @@ class HookManager:
             fix_caps=fix_caps,
         )
 
+        # Update local cache immediately after switch.
         self._cached_layout = target
         self.sensitivity.reset(reason='layout_switch')
 
         if self._on_switch_callback:
             self._on_switch_callback()
 
+    # -------------------------------------------------------------------------
+    # SECTION 4: LOW-LEVEL HOOK ENGINE (Message Pumps & Threads)
+    # -------------------------------------------------------------------------
+
     def _kb_hook_callback(self, n_code, w_param, l_param):
-        """The WH_KEYBOARD_LL callback function."""
+        """The core WH_KEYBOARD_LL callback function.
+        
+        This is the most time-sensitive block of code in the entire application.
+        Failure to call NextHookEx quickly enough will lag the whole OS.
+        """
         try:
             if n_code == HC_ACTION:
                 kb = ctypes.cast(
@@ -460,14 +503,14 @@ class HookManager:
 
                 vk = kb.vkCode
 
-                # Skip injected/synthetic keys (our own SendInput)
+                # Important: Do not re-process keys we injected ourselves.
                 if kb.flags & LLKHF_INJECTED:
                     return _user32.CallNextHookEx(
                         self._hook_id, n_code, w_param, l_param
                     )
 
                 if w_param in (WM_KEYDOWN, WM_SYSKEYDOWN):
-                    # Track modifier states
+                    # Track modifier states for combo-blocking
                     if vk in (VK_SHIFT, VK_LSHIFT, VK_RSHIFT):
                         self._shift_pressed = True
                     elif vk in (VK_CONTROL, VK_LCONTROL, VK_RCONTROL):
@@ -477,9 +520,9 @@ class HookManager:
                     else:
                         block = self._handle_keypress(vk)
                         if block:
-                            return 1
+                            return 1 # Stop the key from reaching the original app.
                 else:
-                    # Key up
+                    # KEY UP events
                     if vk in (VK_SHIFT, VK_LSHIFT, VK_RSHIFT):
                         self._shift_pressed = False
                     elif vk in (VK_CONTROL, VK_LCONTROL, VK_RCONTROL):
@@ -487,18 +530,15 @@ class HookManager:
         except Exception:
             logger.exception('Error in keyboard hook callback')
 
+        # Always pass control to the next hook in the chain unless explicitly blocked.
         return _user32.CallNextHookEx(
             self._hook_id, n_code, w_param, l_param
         )
 
     def _hook_thread_func(self):
-        """Thread function that installs the keyboard hook and
-        runs a Windows message pump."""
+        """Thread worker that installs the hook and maintains the Windows message pump."""
         self._hook_proc = HOOKPROC(self._kb_hook_callback)
 
-        # WH_KEYBOARD_LL needs a loaded DLL as hMod.
-        # python.exe didn't work previously due to 64-bit pointer truncation;
-        # setting the proper restype/argtypes fixes it.
         kernel32 = ctypes.windll.kernel32
         kernel32.GetModuleHandleW.restype = wintypes.HMODULE
         kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
@@ -513,14 +553,12 @@ class HookManager:
 
         if not self._hook_id:
             err = ctypes.get_last_error()
-            logger.error(
-                'Failed to install keyboard hook, '
-                'error=%d', err
-            )
+            logger.error('Failed to install keyboard hook, error=%d', err)
             return
 
         logger.info('Keyboard hook installed (id=%s)', self._hook_id)
 
+        # The message pump is required for low-level hooks to receive events.
         msg = wintypes.MSG()
         while self._running:
             result = _user32.GetMessageW(
@@ -536,12 +574,7 @@ class HookManager:
         logger.info('Keyboard hook removed')
 
     def _on_mouse_click(self, x, y, button, pressed):
-        """Mouse click callback — triggers CRE on left/right click.
-
-        Per the Game Plan spec, both left and right mouse buttons indicate
-        a caret jump. Middle-click (paste) is excluded as it does not move
-        the caret.
-        """
+        """Mouse click callback — triggers a Context Resumption Event (CRE)."""
         if pressed and button != pynput_mouse.Button.middle:
             logger.debug('--- Mouse Click: Context Resumption Event ---')
             self.sensitivity.reset(reason='mouse_click')
@@ -549,18 +582,19 @@ class HookManager:
             self._clear_history()
 
     def _poll_foreground_window(self):
-        """Periodically update cached layout and blacklist status.
-
-        Runs every 100ms on its own thread so the hook callback
-        never needs to call Windows APIs directly.
+        """Worker thread to poll OS state (Layout/Blacklist) every 100ms.
+        
+        This moves slow Windows API calls OUT of the keyboard hook callback
+        to maintain system responsiveness.
         """
         while self._running:
             try:
-                # Detection of layout, window, or Caps Lock changes as Context Resumption Events
+                # 1. Update Layout (Skip if mid-switch correction is happening)
                 if not self.is_correcting:
                     new_layout = get_current_layout()
                     if new_layout != 'unknown':
                         if new_layout != self._cached_layout:
+                            # Manual change detected? Trigger CRE.
                             logger.debug(
                                 'Manual layout change detected (%s -> %s) — triggering CRE',
                                 self._cached_layout, new_layout
@@ -570,15 +604,7 @@ class HookManager:
                             self._clear_history()
                         self._cached_layout = new_layout
 
-                    # Detect manual Caps Lock toggle
-                    caps_state = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
-                    if caps_state != self._last_caps_lock:
-                        logger.debug('Manual Caps Lock toggle detected — triggering CRE')
-                        self.sensitivity.reset(reason='manual_caps_toggle')
-                        self._clear_buffers()
-                        self._clear_history()
-                        self._last_caps_lock = caps_state
-
+                # 2. Update Blacklist Status
                 is_blacklisted = self.blacklist.is_blacklisted()
                 if not is_blacklisted:
                     try:
@@ -587,6 +613,7 @@ class HookManager:
                         logger.debug('Error checking password field: %s', e)
                 self._cached_blacklisted = is_blacklisted
 
+                # 3. Detect Foreground Window changes (Trigger CRE)
                 hwnd = user32.GetForegroundWindow()
                 if self.sensitivity.check_window_change(hwnd):
                     logger.debug('--- Window Change: Context Resumption Event ---')
@@ -594,12 +621,10 @@ class HookManager:
                     self._clear_buffers()
                     self._clear_history()
 
-                # Idle timeout check belongs here, not in the hot hook callback.
-                # IMPORTANT: call record_keystroke() after firing so the timer
-                # resets — otherwise this triggers every 100ms while idle.
+                # 4. Check for Idle Timeout (Trigger CRE)
                 if self.enabled and self.sensitivity.check_idle_timeout(self.idle_timeout):
                     self.sensitivity.reset(reason='idle_timeout')
-                    self.sensitivity.record_keystroke()
+                    self.sensitivity.record_keystroke() # Prevent infinite reset loop
                     self._clear_buffers()
                     self._clear_history()
                     logger.debug('Idle timeout — reset sensitivity')
@@ -610,14 +635,13 @@ class HookManager:
             time.sleep(0.1)
 
     def start(self):
-        """Start all hooks and polling threads."""
+        """Launch all listener threads (Keyboard, Mouse, OS Polling)."""
         self._running = True
 
-        # Initial layout and caps state detection
         self._cached_layout = get_current_layout()
-        self._last_caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
-        logger.info('Initial layout: %s, Caps Lock: %s', self._cached_layout, self._last_caps_lock)
+        logger.info('Initial layout: %s', self._cached_layout)
 
+        # Thread 1: The hot keyboard hook
         self._hook_thread = threading.Thread(
             target=self._hook_thread_func,
             daemon=True,
@@ -625,12 +649,14 @@ class HookManager:
         )
         self._hook_thread.start()
 
+        # Thread 2: Mouse listener (pynput)
         self._mouse_listener = pynput_mouse.Listener(
             on_click=self._on_mouse_click
         )
         self._mouse_listener.daemon = True
         self._mouse_listener.start()
 
+        # Thread 3: Slow poller for OS/UI context
         self._fg_thread = threading.Thread(
             target=self._poll_foreground_window,
             daemon=True,
@@ -640,10 +666,11 @@ class HookManager:
         logger.info('All hooks and polling threads started')
 
     def stop(self):
-        """Stop all hooks and threads."""
+        """Safely dismantle all hooks and stop background threads."""
         self._running = False
 
         if self._hook_id:
+            # Send WM_QUIT to the hook thread's message pump
             _user32.PostThreadMessageW(
                 self._hook_thread.ident,
                 0x0012,  # WM_QUIT

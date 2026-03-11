@@ -55,7 +55,7 @@ class EvaluationEngine:
                     writer = csv.writer(f)
                     writer.writerow([
                         'time', 'active_word', 'shadow_word', 'layout', 
-                        'on_delimiter', 'is_ambiguous', 'score_diff', 'category', 'should_switch'
+                        'on_delimiter', 'is_ambiguous', 'score_diff', 'delta', 'category', 'should_switch'
                     ])
             except OSError:
                 pass
@@ -83,7 +83,7 @@ class EvaluationEngine:
         except OSError as e:
             logger.warning(f"Could not rotate decision_stats.csv: {e}")
 
-    def _log_decision(self, s_active, s_shadow, layout, on_delimiter, is_ambiguous, score_diff, should_switch):
+    def _log_decision(self, s_active, s_shadow, layout, on_delimiter, is_ambiguous, score_diff, delta, should_switch):
         """Log the evaluation decision to the CSV file."""
         import time
         from datetime import datetime
@@ -110,6 +110,7 @@ class EvaluationEngine:
                 on_delimiter,
                 is_ambiguous,
                 f"{abs_score_diff:.3f}",
+                f"{delta:.2f}",
                 category,
                 should_switch
             ])
@@ -201,7 +202,7 @@ class EvaluationEngine:
             if not should_switch and score_diff > 0:
                 is_ambig = True
 
-        self._log_decision(s_active, s_shadow, current_layout, on_delimiter, is_ambig, score_diff, should_switch)
+        self._log_decision(s_active, s_shadow, current_layout, on_delimiter, is_ambig, score_diff, delta, should_switch)
 
         return should_switch, score_diff, is_ambig
 
