@@ -21,9 +21,14 @@ _mutex_handle = None
 if getattr(sys, 'frozen', False):
     BUNDLE_DIR = sys._MEIPASS
     APP_DIR = os.path.dirname(sys.executable)
+    STORAGE_DIR = os.path.join(os.getenv('APPDATA'), 'SwitchLang')
 else:
     BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
     APP_DIR = BUNDLE_DIR
+    STORAGE_DIR = APP_DIR
+
+# Ensure storage directory exists
+os.makedirs(STORAGE_DIR, exist_ok=True)
 
 class LineRotatingFileHandler(logging.Handler):
     """A log handler that limits the file to a maximum number of lines."""
@@ -51,7 +56,7 @@ logging.basicConfig(
     format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
     handlers=[
         LineRotatingFileHandler(
-            os.path.join(APP_DIR, 'switchlang.log'),
+            os.path.join(STORAGE_DIR, 'switchlang.log'),
             max_lines=1000, encoding='utf-8'
         ),
         logging.StreamHandler(sys.stdout)
@@ -70,7 +75,7 @@ from core.hooks import HookManager
 from ui.tray import SystemTrayApp
 from ui.settings_window import SettingsWindow
 
-CONFIG_PATH = os.path.join(APP_DIR, 'config.json')
+CONFIG_PATH = os.path.join(STORAGE_DIR, 'config.json')
 DATA_DIR = os.path.join(BUNDLE_DIR, 'data')
 STYLE_PATH = os.path.join(BUNDLE_DIR, 'ui', 'style.qss')
 COLLISIONS_PATH = os.path.join(DATA_DIR, 'collisions.json')
