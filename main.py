@@ -10,7 +10,12 @@ import logging
 import logging.handlers
 import os
 import sys
+import ctypes
+from ctypes import wintypes
 from collections import deque
+ 
+# Global handle for the single-instance mutex
+_mutex_handle = None
 
 # Configure PyInstaller paths
 if getattr(sys, 'frozen', False):
@@ -136,6 +141,20 @@ def on_settings_changed(config_data, hook_manager, sensitivity):
 
 def main():
     """Application entry point."""
+    # Prevent multiple instances using a named Windows Mutex
+    # We prefix with 'Local\' to ensure it's session-specific.
+    mutex_name = "Local\\SwitchLang_Mutex_v1"
+    ERROR_ALREADY_EXISTS = 183
+    
+    # We must keep a reference to this handle for the duration of the app
+    global _mutex_handle
+    _mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_name)
+    last_error = ctypes.windll.kernel32.GetLastError()
+    
+    if last_error == ERROR_ALREADY_EXISTS:
+        print("SwitchLang is already running.")
+        sys.exit(0)
+
     check_data_files()
 
     config = load_config()
@@ -180,6 +199,10 @@ def main():
     exit_code = app.exec()
 
     hook_manager.stop()
+
+    if _mutex_handle:
+        ctypes.windll.kernel32.CloseHandle(_mutex_handle)
+
     sys.exit(exit_code)
 
 
