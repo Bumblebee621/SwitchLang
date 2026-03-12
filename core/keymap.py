@@ -139,6 +139,10 @@ def get_both_chars(vk_code, shifted, caps_lock=False):
     Returns:
         Tuple (en_char, he_char) or (None, None) if unmapped.
     """
+    if vk_code == 0x20: return (' ', ' ')
+    if vk_code == 0x0D: return ('\n', '\n')
+    if vk_code == 0x09: return ('\t', '\t')
+
     effective_shift = _get_effective_shift(vk_code, shifted, caps_lock)
 
     table = VK_TO_CHARS_SHIFT if effective_shift else VK_TO_CHARS

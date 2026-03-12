@@ -441,7 +441,13 @@ class HookManager:
         buf_shadow = self.buffer_shadow
         
         # 3. Clean up manager state before handing off to the thread.
-        self._clear_buffers()
+        if delimiter_char is not None:
+            self._clear_buffers()
+        else:
+            # Mid-word switch: Swap buffers to stay in sync with the new layout on screen.
+            # (e.g. if we switched from HE to EN, what was 'shadow' is now 'active').
+            self.buffer_active, self.buffer_shadow = self.buffer_shadow, self.buffer_active
+
         self._clear_history()
 
         if fix_caps:
@@ -467,6 +473,10 @@ class HookManager:
                    correction_block=None, trigger_delimiter=None,
                    fix_caps=False):
         """Background thread worker to execute the erase/toggle/inject sequence."""
+        # Capture the pending queue items for buffer integration.
+        # execute_switch will pop them, so we take a snapshot now.
+        pending_items = list(self.pending_queue)
+
         execute_switch(
             buf_active,
             buf_shadow,
@@ -477,6 +487,24 @@ class HookManager:
             trigger_delimiter=trigger_delimiter,
             fix_caps=fix_caps,
         )
+
+        # IMPORTANT: Integrate pending characters into the buffers so the engine
+        # knows about the FULL word currently on screen.
+        for q_vk, q_shift, q_caps in pending_items:
+            # If the user typed a delimiter (Space/Enter) while the switch was
+            # happening, it means the current word is finished. Clear buffers.
+            if q_vk in DELIMITER_VKS:
+                self._clear_buffers()
+                continue
+
+            en_ch, he_ch = get_both_chars(q_vk, q_shift, q_caps)
+            if en_ch:
+                if target == 'en':
+                    self.buffer_active += en_ch
+                    self.buffer_shadow += he_ch
+                else:
+                    self.buffer_active += he_ch
+                    self.buffer_shadow += en_ch
 
         # Update local cache immediately after switch.
         self._cached_layout = target
