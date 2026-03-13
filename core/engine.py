@@ -93,16 +93,14 @@ class EvaluationEngine:
         from datetime import datetime
 
         abs_score_diff = abs(score_diff)
-        if abs_score_diff >= 3.0:
-            category = ">= 3.0"
-        elif abs_score_diff >= 2.0:
-            category = "2.0 - 3.0"
-        elif abs_score_diff >= 1.0:
-            category = "1.0 - 2.0"
-        elif abs_score_diff >= 0.0:
-            category = "0.0 - 1.0"
+        if abs_score_diff > 3.0:
+            category = "|x| > 3"
+        elif abs_score_diff > 2.0:
+            category = "3 > |x| > 2"
+        elif abs_score_diff > 1.0:
+            category = "2 > |x| > 1"
         else:
-            category = "< 0.0"
+            category = "1 > |x|"
 
         with self.stats_lock:
             # Queue the log
@@ -113,7 +111,7 @@ class EvaluationEngine:
                 layout,
                 on_delimiter,
                 is_ambiguous,
-                f"{abs_score_diff:.3f}",
+                f"{score_diff:.3f}",
                 f"{delta:.2f}",
                 category,
                 should_switch
