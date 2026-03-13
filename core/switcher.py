@@ -283,10 +283,6 @@ def execute_switch(buffer_active, buffer_shadow,
                 'Correction: erasing %d chars, injecting "%s"',
                 erase_len, inject_text
             )
-            
-            inject_text = buffer_shadow
-            if trigger_delimiter:
-                inject_text += trigger_delimiter
 
         send_backspaces(erase_len)
         time.sleep(_CORRECTION_STEP_DELAY)

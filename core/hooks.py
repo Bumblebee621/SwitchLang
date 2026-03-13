@@ -43,6 +43,7 @@ user32.GetKeyboardLayout.restype = wintypes.HKL
 WH_KEYBOARD_LL = 13
 WM_KEYDOWN = 0x0100
 WM_SYSKEYDOWN = 0x0104
+WM_QUIT = 0x0012
 HC_ACTION = 0
 
 # Flag to detect injected keys (bit 4 in KBDLLHOOKSTRUCT.flags)
@@ -151,6 +152,11 @@ _user32.GetWindowLongW.restype = wintypes.LONG
 # SECTION 2: UI AUTOMATION HELPERS
 # =============================================================================
 
+def _is_caps_lock_on():
+    """Helper to check if Caps Lock is currently activated."""
+    return _user32.GetKeyState(VK_CAPITAL) & 1 == 1
+
+
 def is_password_field_active():
     """Safety check: detects if the user is currently typing in a password field.
     
@@ -204,7 +210,7 @@ class HookManager:
 
         # Lookback queue: stores _WordEntry items for completed words in the
         # current session. Used for "Retroactive Correction" of ambiguous words.
-        self.history_deque = collections.deque()
+        self.history_deque = collections.deque(maxlen=50)
 
         # Concurrency Lock: True when the switcher thread is erasing/re-injecting text.
         self.is_correcting = False
@@ -271,9 +277,10 @@ class HookManager:
         block = []
         for entry in reversed(self.history_deque):
             if entry.is_ambiguous:
-                block.insert(0, entry)
+                block.append(entry)
             else:
                 break
+        block.reverse()
         if block:
             logger.debug(
                 'Correction block: %d ambiguous words: %s',
@@ -300,7 +307,7 @@ class HookManager:
         """
         # 1. While a correction switch is happening, intercept and queue all typing.
         if self.is_correcting:
-            caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
+            caps_lock = _is_caps_lock_on()
             if vk_code in DELIMITER_VKS:
                 self.pending_queue.append((vk_code, self._shift_pressed, caps_lock))
             else:
@@ -324,7 +331,7 @@ class HookManager:
 
         # Log keystrokes if debug mode is active
         if self.debug_mode:
-            caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
+            caps_lock = _is_caps_lock_on()
             en_ch, he_ch = get_both_chars(vk_code, self._shift_pressed, caps_lock)
             logger.info('[DEBUG] Keypress: VK=%d, EN="%s", HE="%s", Shift=%s, Caps=%s',
                         vk_code, en_ch, he_ch, self._shift_pressed, caps_lock)
@@ -357,7 +364,7 @@ class HookManager:
                 )
 
                 # Special Case: Hebrew + Caps Lock = Incorrect English.
-                caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
+                caps_lock = _is_caps_lock_on()
                 needs_caps_fix = current == 'he' and caps_lock and not should_switch
 
                 if should_switch or needs_caps_fix:
@@ -377,7 +384,7 @@ class HookManager:
             return False
 
         # 5. Process Regular Character — TRIGGER TIER 2 EVALUATION (Mid-word)
-        caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
+        caps_lock = _is_caps_lock_on()
         en_char, he_char = get_both_chars(vk_code, self._shift_pressed, caps_lock)
         if en_char is None:
             return False
@@ -406,7 +413,7 @@ class HookManager:
                 diff, self.sensitivity.delta, should_switch
             )
             
-            caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
+            caps_lock = _is_caps_lock_on()
             needs_caps_fix = current == 'he' and caps_lock and not should_switch
 
             if should_switch or needs_caps_fix:
@@ -430,7 +437,7 @@ class HookManager:
         fix_caps = False
 
         # 1. Determine if we are just fixing Caps Lock within the same layout.
-        caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
+        caps_lock = _is_caps_lock_on()
         if current == 'he' and caps_lock:
             if target == 'en':
                 # User intended English (HEB+CAPS=ENG). Per spec, we allow this manually.
@@ -486,11 +493,11 @@ class HookManager:
                    correction_block=None, trigger_delimiter=None,
                    fix_caps=False):
         """Background thread worker to execute the erase/toggle/inject sequence."""
-        # Capture the pending queue items for buffer integration.
-        # execute_switch will pop them, so we take a snapshot now.
-        pending_items = list(self.pending_queue)
+        # Pre-emptive cache update: prevents hook from processing keys with old layout
+        # before 'is_correcting' gets flipped back to False.
+        self._cached_layout = target
 
-        execute_switch(
+        consumed_items = execute_switch(
             buf_active,
             buf_shadow,
             self.pending_queue,
@@ -503,7 +510,7 @@ class HookManager:
 
         # IMPORTANT: Integrate pending characters into the buffers so the engine
         # knows about the FULL word currently on screen.
-        for q_vk, q_shift, q_caps in pending_items:
+        for q_vk, q_shift, q_caps in (consumed_items or []):
             # If the user typed a delimiter (Space/Enter) while the switch was
             # happening, it means the current word is finished. Clear buffers.
             if q_vk in DELIMITER_VKS:
@@ -519,8 +526,6 @@ class HookManager:
                     self.buffer_active += he_ch
                     self.buffer_shadow += en_ch
 
-        # Update local cache immediately after switch.
-        self._cached_layout = target
         self.sensitivity.reset(reason='layout_switch')
 
         if self._on_switch_callback:
@@ -710,11 +715,11 @@ class HookManager:
         """Safely dismantle all hooks and stop background threads."""
         self._running = False
 
-        if self._hook_id:
+        if self._hook_id and self._hook_thread and self._hook_thread.ident:
             # Send WM_QUIT to the hook thread's message pump
             _user32.PostThreadMessageW(
                 self._hook_thread.ident,
-                0x0012,  # WM_QUIT
+                WM_QUIT,
                 0, 0
             )
 
