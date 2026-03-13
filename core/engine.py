@@ -22,7 +22,7 @@ class EvaluationEngine:
     MAX_CSV_SIZE_BYTES = 10 * 1024 * 1024
     MAX_CSV_LINES = 10000
 
-    def __init__(self, en_model, he_model, collisions_path=None, storage_dir=None):
+    def __init__(self, en_model, he_model, collisions_path=None, storage_dir=None, enable_logging=True):
         """Initialize with trigram models and optional collision set.
 
         Args:
@@ -30,9 +30,11 @@ class EvaluationEngine:
             he_model: TrigramModel for Hebrew.
             collisions_path: Path to collisions.json (shadow-collision set).
             storage_dir: Base directory for stats and logs (defaults to project data/ folder).
+            enable_logging: Whether to log decisions to a CSV file.
         """
         self.en_model = en_model
         self.he_model = he_model
+        self.enable_logging = enable_logging
 
         self.collisions = set()
         if collisions_path and os.path.exists(collisions_path):
@@ -51,7 +53,8 @@ class EvaluationEngine:
         self.stats_lock = threading.Lock()
         self._pending_logs = deque(maxlen=1000)
         self._logs_since_check = 0
-        self._ensure_stats_file()
+        if self.enable_logging:
+            self._ensure_stats_file()
 
     def _ensure_stats_file(self):
         """Ensure the stats CSV exists with headers."""
@@ -91,6 +94,8 @@ class EvaluationEngine:
 
     def _log_decision(self, s_active, s_shadow, layout, on_delimiter, is_ambiguous, score_diff, delta, should_switch):
         """Log the evaluation decision to the CSV file."""
+        if not self.enable_logging:
+            return
         abs_score_diff = abs(score_diff)
         if abs_score_diff > 3.0:
             category = "|x| > 3"
