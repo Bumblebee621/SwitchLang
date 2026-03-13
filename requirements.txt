@@ -3,3 +3,4 @@ PyQt6>=6.6
 
 # Global hooks (Mouse events, fallback)
 pynput>=1.7
+python-dotenv
