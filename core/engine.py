@@ -10,12 +10,17 @@ import json
 import os
 import threading
 import logging
+from datetime import datetime
+from collections import deque
 
 logger = logging.getLogger(__name__)
 
 
 class EvaluationEngine:
     """Evaluates whether a layout switch should occur."""
+
+    MAX_CSV_SIZE_BYTES = 10 * 1024 * 1024
+    MAX_CSV_LINES = 10000
 
     def __init__(self, en_model, he_model, collisions_path=None, storage_dir=None):
         """Initialize with trigram models and optional collision set.
@@ -44,10 +49,8 @@ class EvaluationEngine:
                 'decision_stats.csv'
             )
         self.stats_lock = threading.Lock()
-        self._pending_logs = []
+        self._pending_logs = deque(maxlen=1000)
         self._logs_since_check = 0
-        self.MAX_CSV_SIZE_BYTES = 10 * 1024 * 1024
-        self.MAX_CSV_LINES = 10000
         self._ensure_stats_file()
 
     def _ensure_stats_file(self):
@@ -61,8 +64,8 @@ class EvaluationEngine:
                         'time', 'active_word', 'shadow_word', 'layout', 
                         'on_delimiter', 'is_ambiguous', 'score_diff', 'delta', 'category', 'should_switch'
                     ])
-            except OSError:
-                pass
+            except OSError as e:
+                logger.warning(f"Could not create stats file: {e}")
         else:
             self._rotate_stats_file()
 
@@ -76,7 +79,6 @@ class EvaluationEngine:
             if file_size <= self.MAX_CSV_SIZE_BYTES:
                 return
                 
-            from collections import deque
             with open(self.stats_path, 'r', encoding='utf-8-sig', newline='') as f:
                 header = f.readline()
                 lines = deque(f, maxlen=self.MAX_CSV_LINES)
@@ -89,9 +91,6 @@ class EvaluationEngine:
 
     def _log_decision(self, s_active, s_shadow, layout, on_delimiter, is_ambiguous, score_diff, delta, should_switch):
         """Log the evaluation decision to the CSV file."""
-        import time
-        from datetime import datetime
-
         abs_score_diff = abs(score_diff)
         if abs_score_diff > 3.0:
             category = "|x| > 3"
@@ -103,7 +102,7 @@ class EvaluationEngine:
             category = "1 > |x|"
 
         with self.stats_lock:
-            # Queue the log
+            # Queue the log (bounds handled by deque automatically)
             self._pending_logs.append([
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
                 s_active,
@@ -116,23 +115,21 @@ class EvaluationEngine:
                 category,
                 should_switch
             ])
-            # Keep queue size bounded in case file is permanently locked
-            if len(self._pending_logs) > 1000:
-                self._pending_logs.pop(0)
 
             try:
-                with open(self.stats_path, 'a', encoding='utf-8-sig', newline='') as f:
-                    writer = csv.writer(f)
-                    # Write all pending logs at once
-                    for row in self._pending_logs:
-                        writer.writerow(row)
+                if self._pending_logs:
+                    with open(self.stats_path, 'a', encoding='utf-8-sig', newline='') as f:
+                        writer = csv.writer(f)
+                        # Write all pending logs at once
+                        for row in self._pending_logs:
+                            writer.writerow(row)
                     
                     self._logs_since_check += len(self._pending_logs)
                     self._pending_logs.clear()
                     
-                    if self._logs_since_check > 1000:
-                        self._logs_since_check = 0
-                        self._rotate_stats_file()
+                if self._logs_since_check > 1000:
+                    self._logs_since_check = 0
+                    self._rotate_stats_file()
             except OSError as e:
                 logger.warning(f"Could not write to decision_stats.csv (is it open in Excel?): {e}")
 
