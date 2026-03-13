@@ -21,11 +21,12 @@ _mutex_handle = None
 if getattr(sys, 'frozen', False):
     BUNDLE_DIR = sys._MEIPASS
     APP_DIR = os.path.dirname(sys.executable)
-    STORAGE_DIR = os.path.join(os.getenv('APPDATA'), 'SwitchLang')
 else:
     BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
     APP_DIR = BUNDLE_DIR
-    STORAGE_DIR = APP_DIR
+
+# Keep user data in APPDATA to avoid cluttering the repository
+STORAGE_DIR = os.path.join(os.getenv('APPDATA'), 'SwitchLang')
 
 # Ensure storage directory exists
 os.makedirs(STORAGE_DIR, exist_ok=True)
