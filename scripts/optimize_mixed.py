@@ -2,6 +2,8 @@ import os
 import sys
 import random
 import itertools
+import concurrent.futures
+from multiprocessing import cpu_count
 from typing import List, Tuple
 
 # Add project root to sys.path so we can import core modules
@@ -66,7 +68,11 @@ def simulate_mixed_typing(chunks: List[Tuple[str, str]],
                     Set to -1 for perfect valid typing.
                     
     Returns:
-        (switched: bool, total_chars_typed: int, chars_since_trap: int)
+        Tuple of (status: str, total_chars_typed: int, chars_since_trap: int).
+        status is one of:
+          - 'caught_trap': Engine correctly detected the trap and switched.
+          - 'fp_early':    Engine switched BEFORE reaching the trap (false positive).
+          - 'no_switch':   Engine never triggered a switch.
     """
     sensitivity.reset()
     buffer_active = ''
@@ -77,7 +83,7 @@ def simulate_mixed_typing(chunks: List[Tuple[str, str]],
     in_trap = False
     
     if not chunks:
-        return False, 0, 0
+        return 'no_switch', 0, 0
         
     # Standard: Start OS layout in the language of the first chunk
     os_layout = chunks[0][0]
@@ -106,12 +112,13 @@ def simulate_mixed_typing(chunks: List[Tuple[str, str]],
                 
             if c in (' ', '\n', '\t'):
                 if buffer_active:
-                    switched, _ = engine.evaluate(
+                    switched, _, _ = engine.evaluate(
                         buffer_active, buffer_shadow, sensitivity.delta,
                         current_layout=os_layout, on_delimiter=True
                     )
                     if switched:
-                        return True, total_chars, chars_since_trap
+                        status = 'caught_trap' if in_trap else 'fp_early'
+                        return status, total_chars, chars_since_trap
                     sensitivity.on_word_complete()
                 buffer_active = ''
                 buffer_shadow = ''
@@ -132,71 +139,23 @@ def simulate_mixed_typing(chunks: List[Tuple[str, str]],
                 buffer_shadow += buf_shd
                 
                 if len(buffer_active) >= 3:
-                    switched, _ = engine.evaluate(
+                    switched, _, _ = engine.evaluate(
                         buffer_active, buffer_shadow, sensitivity.delta,
                         current_layout=os_layout, on_delimiter=False
                     )
                     if switched:
-                        return True, total_chars, chars_since_trap
+                        status = 'caught_trap' if in_trap else 'fp_early'
+                        return status, total_chars, chars_since_trap
 
-    return False, total_chars, chars_since_trap
+    return 'no_switch', total_chars, chars_since_trap
 
-
-def load_pushshift_reddit_comments(num_samples: int = 1000):
-    """
-    Loads samples from HuggingFace dataset 'fddemarco/pushshift-reddit-comments'.
-    NOTE: Requires `datasets` library: pip install datasets
-    Filters for relevant Israeli subreddits or just pulls raw and relies on 
-    the chunker to find mixed comments.
-    """
-    try:
-        from datasets import load_dataset
-    except ImportError:
-        print("Please 'pip install datasets' to load Pushshift Reddit dumps.")
-        sys.exit(1)
-
-    print("Streaming fddemarco/pushshift-reddit-comments... (This may take a moment)")
-    
-    # We use streaming because it is utterly huge
-    dataset = load_dataset("fddemarco/pushshift-reddit-comments", split='train', streaming=True)
-    
-    samples = []
-    # Identify subreddits likely to have mixed EN/HE
-    target_subs = {'ani_bm', 'Israel', 'Judaism', 'Hebrew', 'TelAviv'}
-    
-    iterator = iter(dataset)
-    while len(samples) < num_samples:
-        try:
-            row = next(iterator)
-            body = row.get('body', "")
-            sub = row.get('subreddit', "")
-            
-            # Skip empty or deleted comments
-            if not body or body == '[deleted]' or body == '[removed]':
-                continue
-                
-            # Filter by target subreddits or simply look for hebrew characters
-            # Optimization: Just check if there's any hebrew char in the body
-            has_hebrew = any('\u0590' <= c <= '\u05FF' for c in body)
-            has_english = any('\u0020' <= c <= '\u007F' and c.isalpha() for c in body)
-            
-            # We want mixed sentences for our trap
-            if has_hebrew and has_english and len(body) > 20:
-                # Clean newlines for single-line testing
-                body = body.replace('\n', ' ').strip()
-                samples.append(body)
-                if len(samples) % 100 == 0:
-                    print(f"Gathered {len(samples)}/{num_samples} mixed samples...")
-                    
-        except StopIteration:
-            break
-            
-    return samples
 
 def evaluate_mixed_params(en_model, he_model, data_mixed, baseline_delta, alpha, p):
+    data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data'))
     engine = EvaluationEngine(
         en_model, he_model, 
-        collisions_path=os.path.join('data', 'collisions.json')
+        collisions_path=os.path.join(data_dir, 'collisions.json'),
+        enable_logging=False
     )
     sensitivity = SensitivityManager(baseline_delta=baseline_delta, alpha=alpha, p=p)
     
@@ -206,25 +165,26 @@ def evaluate_mixed_params(en_model, he_model, data_mixed, baseline_delta, alpha,
     total_traps = 0
     
     # PASS A: Valid Typing (FPR Test)
+    # trap_index=-1 means perfect typing with valid CREs — any switch is a FP.
     for text in data_mixed:
         chunks = chunk_text(text)
-        # We only care about sentences that actually have >1 language chunks
         if len(chunks) > 1:
-            # Trap index -1 means perfect typing with valid CREs
-            switched, _, _ = simulate_mixed_typing(chunks, engine, sensitivity, trap_index=-1)
-            if switched:
+            status, _, _ = simulate_mixed_typing(chunks, engine, sensitivity, trap_index=-1)
+            if status != 'no_switch':
                 fp_count += 1
                 
     # PASS B: The Mid-Sentence Trap (Recall/Latency Test)
+    # Only count 'caught_trap' as a True Positive. 'fp_early' means the engine
+    # switched before the trap was even reached — that's a False Negative for
+    # the trap (the engine caught something else, not the intended error).
     for text in data_mixed:
         chunks = chunk_text(text)
         if len(chunks) > 1:
             total_traps += 1
-            # Trap the final chunk in the sequence
             trap_idx = len(chunks) - 1
-            switched, _, chars_since_trap = simulate_mixed_typing(chunks, engine, sensitivity, trap_index=trap_idx)
+            status, _, chars_since_trap = simulate_mixed_typing(chunks, engine, sensitivity, trap_index=trap_idx)
             
-            if switched:
+            if status == 'caught_trap':
                 tp_count += 1
                 latency_sum += chars_since_trap
 
@@ -236,37 +196,42 @@ def evaluate_mixed_params(en_model, he_model, data_mixed, baseline_delta, alpha,
     
     return fpr, recall, avg_lat
 
-import concurrent.futures
-from multiprocessing import cpu_count
+_en_model = None
+_he_model = None
 
-# --- existing code omitted for brevity --
+def init_worker(data_dir):
+    global _en_model, _he_model
+    from core.trigram import load_models
+    _en_model, _he_model = load_models(data_dir)
 
 def worker(args):
     """Worker function for multiprocessing."""
-    try:
-        from core.trigram import load_models
-    except ImportError:
-        import sys
-        import os
-        sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-        from core.trigram import load_models
-        
-    en_model, he_model, data_mixed, d, a, p = args
-    fpr, recall, lat = evaluate_mixed_params(en_model, he_model, data_mixed, d, a, p)
+    data_mixed, d, a, p = args
+    fpr, recall, lat = evaluate_mixed_params(_en_model, _he_model, data_mixed, d, a, p)
     return {
         'd': d, 'a': a, 'p': p,
         'fpr': fpr, 'recall': recall, 'lat': lat
     }
 
 def main():
+    import json
+    
     print("Loading models...")
-    en_model, he_model = load_models('data')
+    data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data'))
+    en_model, he_model = load_models(data_dir)
     
     print("Loading datasets...")
-    # Getting 1000 mixed samples from Reddit for a very robust test 
-    data_mixed = load_pushshift_reddit_comments(num_samples=1000)
+    data_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'mixed_reddit_test_set.json'))
     
-    print(f"Loaded {len(data_mixed)} mixed EN/HE Reddit samples.")
+    if not os.path.exists(data_path):
+        print(f"ERROR: Dataset not found at {data_path}")
+        print("Please run 'python scripts/extract_test_data.py' first to generate the local test set.")
+        sys.exit(1)
+        
+    with open(data_path, 'r', encoding='utf-8') as f:
+        data_mixed = json.load(f)
+    
+    print(f"Loaded {len(data_mixed)} mixed EN/HE Reddit samples from local cache.")
     
     # Extended search ranges
     deltas = [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0]
@@ -278,22 +243,29 @@ def main():
     print(f"{'delta':<6} | {'alpha':<6} | {'p':<4} | {'FPR':<6} | {'Recall':<6} | {'TrapLat'}")
     print("-" * 50)
     
-    # Prepare arguments for the worker pool
+    # Prepare arguments for the worker pool (exclude models)
     tasks = [
-        (en_model, he_model, data_mixed, d, a, p)
+        (data_mixed, d, a, p)
         for d, a, p in itertools.product(deltas, alphas, ps)
     ]
     
-    # We must use multiprocessing, not threading, because Python's EvaluationEngine
-    # (running standard trigram loops) is CPU-bound so the GIL will lock threads.
     num_workers = max(1, cpu_count() - 1)
     print(f"Starting ProcessPoolExecutor with {num_workers} workers to evaluate {len(tasks)} combinations...")
     
-    with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=num_workers,
+        initializer=init_worker,
+        initargs=(data_dir,)
+    ) as executor:
         for result in executor.map(worker, tasks):
             results.append(result)
-            print(f"{result['d']:<6.1f} | {result['a']:<6.1f} | {result['p']:<4.1f} | "
-                  f"{result['fpr']:<6.2%} | {result['recall']:<6.2%} | {result['lat']:.1f}")
+            try:
+                print(f"{result['d']:<6.1f} | {result['a']:<6.1f} | {result['p']:<4.1f} | "
+                      f"{result['fpr']:<6.2%} | {result['recall']:<6.2%} | {result['lat']:.1f}")
+            except UnicodeEncodeError:
+                # Fallback for terminals that can't handle percent sign or other chars? 
+                # Unlikely for ASCII/HE, but being safe.
+                print(f"d={result['d']}, a={result['a']}, p={result['p']} -> FPR: {result['fpr']}, Recall: {result['recall']}")
 
     best = sorted(results, key=lambda x: (x['fpr'], -x['recall'], x['lat']))
     print("\n--- TOP 10 MIXED DATSET COMBINATIONS ---")
