@@ -28,23 +28,12 @@ VK_BACK = 0x08
 VK_CAPITAL = 0x14
 WM_INPUTLANGCHANGEREQUEST = 0x0050
 KEYEVENTF_EXTENDEDKEY = 0x0001
+_CORRECTION_STEP_DELAY = 0.005  # seconds between correction sub-steps
 
 # Hebrew and English HKL handles
 HKL_EN_US = 0x04090409
 HKL_HE = 0x040D040D
 
-
-class MOUSEINPUT(ctypes.Structure):
-    _fields_ = [
-        ('dx', wintypes.LONG),
-        ('dy', wintypes.LONG),
-        ('mouseData', wintypes.DWORD),
-        ('dwFlags', wintypes.DWORD),
-        ('time', wintypes.DWORD),
-        ('dwExtraInfo', ctypes.POINTER(ctypes.c_ulong)),
-    ]
-
-# HARDWAREINPUT is omitted; only KEYBDINPUT is needed here.
 
 class KEYBDINPUT(ctypes.Structure):
     _fields_ = [
@@ -59,13 +48,14 @@ class INPUT(ctypes.Structure):
     class _INPUT_UNION(ctypes.Union):
         _fields_ = [
             ('ki', KEYBDINPUT),
-            ('mi', MOUSEINPUT),
         ]
 
     _fields_ = [
         ('type', wintypes.DWORD),
         ('union', _INPUT_UNION),
     ]
+
+_EXTRA_INFO = ctypes.pointer(ctypes.c_ulong(0))
 
 
 def _make_key_input(vk=0, scan=0, flags=0):
@@ -76,7 +66,7 @@ def _make_key_input(vk=0, scan=0, flags=0):
     inp.union.ki.wScan = scan
     inp.union.ki.dwFlags = flags
     inp.union.ki.time = 0
-    inp.union.ki.dwExtraInfo = ctypes.pointer(ctypes.c_ulong(0))
+    inp.union.ki.dwExtraInfo = _EXTRA_INFO
     return inp
 
 
@@ -104,8 +94,8 @@ def send_backspaces(count):
 def toggle_caps_lock():
     """Simulate a Caps Lock key press to toggle its state."""
     inputs = [
-        _make_key_input(vk=VK_CAPITAL, flags=KEYEVENTF_EXTENDEDKEY),
-        _make_key_input(vk=VK_CAPITAL, flags=KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP)
+        _make_key_input(vk=VK_CAPITAL),
+        _make_key_input(vk=VK_CAPITAL, flags=KEYEVENTF_KEYUP)
     ]
     _send_inputs(inputs)
 
@@ -274,18 +264,12 @@ def execute_switch(buffer_active, buffer_shadow,
                 parts.append(trigger_delimiter)
             inject_text = ''.join(parts)
 
-            if correction_block:
-                logger.info(
-                    'Retroactive correction: erasing %d chars, injecting "%s"',
-                    erase_len, inject_text
-                )
-                for entry in correction_block:
-                    logger.info('  └─ Replaced history: "%s" -> "%s"', entry.active, entry.shadow)
-            else:
-                logger.info(
-                    'Correction: erasing %d chars, injecting "%s"',
-                    erase_len, inject_text
-                )
+            logger.info(
+                'Retroactive correction: erasing %d chars, injecting "%s"',
+                erase_len, inject_text
+            )
+            for entry in correction_block:
+                logger.info('  └─ Replaced history: "%s" -> "%s"', entry.active, entry.shadow)
         else:
             erase_len = len(buffer_active)
             if trigger_delimiter is None:
@@ -295,23 +279,35 @@ def execute_switch(buffer_active, buffer_shadow,
             if trigger_delimiter:
                 inject_text += trigger_delimiter
 
+            logger.info(
+                'Correction: erasing %d chars, injecting "%s"',
+                erase_len, inject_text
+            )
+            
+            inject_text = buffer_shadow
+            if trigger_delimiter:
+                inject_text += trigger_delimiter
+
         send_backspaces(erase_len)
-        time.sleep(0.005)
+        time.sleep(_CORRECTION_STEP_DELAY)
 
         if fix_caps:
             toggle_caps_lock()
-            time.sleep(0.005)
+            time.sleep(_CORRECTION_STEP_DELAY)
 
         current_layout = get_current_layout()
         if target_layout != current_layout:
             toggle_layout(target_layout)
 
         send_unicode_string(inject_text)
-        time.sleep(0.005)
+        time.sleep(_CORRECTION_STEP_DELAY)
         # Inject pending queue
         text_to_inject = ""
+        consumed_pending = []
         while pending_queue:
-            q_vk, q_shift, q_caps = pending_queue.popleft()
+            item = pending_queue.popleft()
+            consumed_pending.append(item)
+            q_vk, q_shift, q_caps = item
 
             # Map the raw typed key to a character in the TARGET layout.
             ch = vk_to_char(q_vk, q_shift, layout=target_layout, caps_lock=q_caps)
@@ -319,5 +315,6 @@ def execute_switch(buffer_active, buffer_shadow,
                 text_to_inject += ch
         if text_to_inject:
             send_unicode_string(text_to_inject)
+        return consumed_pending
     finally:
         set_correcting(False)
