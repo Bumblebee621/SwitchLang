@@ -9,6 +9,8 @@ A collision pair is a Hebrew word whose physical key shadow (interpreted
 on an English QWERTY layout) is a valid English word, and vice versa.
 Both sides are written into collisions.json as a flat sorted list.
 
+JSON file will contain only lower case words.
+
 Run from the project root:
     python scripts/build_collisions.py
 """
