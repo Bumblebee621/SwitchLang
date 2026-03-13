@@ -6,6 +6,7 @@ tray.py — System tray icon and context menu.
 from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QApplication
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QAction
 from PyQt6.QtCore import Qt, QSize
+import os
 
 
 def _create_tray_icon_pixmap():
@@ -37,9 +38,12 @@ def _create_tray_icon_pixmap():
 class SystemTrayApp(QSystemTrayIcon):
     """System tray icon with context menu."""
 
-    def __init__(self, settings_window, hook_manager, parent=None):
-        pixmap = _create_tray_icon_pixmap()
-        icon = QIcon(pixmap)
+    def __init__(self, settings_window, hook_manager, icon_path=None, parent=None):
+        if icon_path and os.path.exists(icon_path):
+            icon = QIcon(icon_path)
+        else:
+            pixmap = _create_tray_icon_pixmap()
+            icon = QIcon(pixmap)
         super().__init__(icon, parent)
 
         self.settings_window = settings_window

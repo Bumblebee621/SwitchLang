@@ -8,6 +8,7 @@ PyInstaller.__main__.run([
     '--name=SwitchLang',
     '--noconsole',
     '--onefile',
+    f'--icon={os.path.join(APP_DIR, "data", "icon.ico")}',
     f'--add-data={os.path.join(APP_DIR, "data")};data',
     f'--add-data={os.path.join(APP_DIR, "ui")};ui',
     '--clean'

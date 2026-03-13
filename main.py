@@ -95,6 +95,7 @@ def load_config():
         'baseline_delta': 2.0,
         'sensitivity_alpha': 0.3,
         'idle_timeout_seconds': 5.0,
+        'debug_mode': False,
         'blacklist': sorted(list(DEFAULT_BLACKLIST))
     }
 
@@ -135,6 +136,7 @@ def on_settings_changed(config_data, hook_manager, sensitivity):
         sensitivity: SensitivityManager instance.
     """
     hook_manager.set_enabled(config_data.get('enabled', True))
+    hook_manager.set_debug_mode(config_data.get('debug_mode', False))
     sensitivity.update_config(
         baseline_delta=config_data.get('baseline_delta', 2.0),
         alpha=config_data.get('sensitivity_alpha', 0.3)
@@ -166,7 +168,7 @@ def main():
 
     en_model, he_model = load_models(DATA_DIR)
 
-    engine = EvaluationEngine(en_model, he_model, COLLISIONS_PATH)
+    engine = EvaluationEngine(en_model, he_model, COLLISIONS_PATH, storage_dir=STORAGE_DIR)
 
     sensitivity = SensitivityManager(
         baseline_delta=config.get('baseline_delta', 2.0),
@@ -186,7 +188,8 @@ def main():
 
     settings_window = SettingsWindow(CONFIG_PATH, blacklist)
 
-    tray = SystemTrayApp(settings_window, hook_manager)
+    icon_path = os.path.join(DATA_DIR, 'icon.png')
+    tray = SystemTrayApp(settings_window, hook_manager, icon_path=icon_path)
     tray.show()
 
     settings_window.settings_changed.connect(
