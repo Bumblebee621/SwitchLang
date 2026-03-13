@@ -41,7 +41,10 @@ data/*.json
 !data/en_trigrams.json
 !data/he_trigrams.json
 !data/collisions.json
+!data/icon.ico
+!data/icon.png
 Bugs.md
+Output/
 
 # IDEs
 .idea/
