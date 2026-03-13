@@ -1,3 +1,10 @@
+"""
+This script creates an installer for the SwitchLang application.
+It uses Inno Setup to create a self-extracting executable that installs the application to the user's home directory.
+This script calls build.py to create the executable and then uses Inno Setup to create the installer.
+"""
+
+
 import subprocess
 import os
 import sys
