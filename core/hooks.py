@@ -195,6 +195,7 @@ class HookManager:
         self.config = config
 
         self.enabled = config.get('enabled', True)
+        self.debug_mode = config.get('debug_mode', False)
         self.idle_timeout = config.get('idle_timeout_seconds', 15.0)
 
         # Buffers for the current partial word
@@ -229,6 +230,11 @@ class HookManager:
         """Enable or disable the engine logic (tray-accessible)."""
         self.enabled = enabled
         logger.info('Engine %s', 'enabled' if enabled else 'disabled')
+
+    def set_debug_mode(self, enabled):
+        """Enable or disable raw keystroke logging."""
+        self.debug_mode = enabled
+        logger.info('Debug Mode %s', 'enabled' if enabled else 'disabled')
 
     def set_on_switch_callback(self, callback):
         """Set a callback for when a layout switch occurs (e.g. for UI sounds)."""
@@ -315,6 +321,13 @@ class HookManager:
 
         # Reset sensitivity timer on every active keystroke
         self.sensitivity.record_keystroke()
+
+        # Log keystrokes if debug mode is active
+        if self.debug_mode:
+            caps_lock = _user32.GetKeyState(VK_CAPITAL) & 1 == 1
+            en_ch, he_ch = get_both_chars(vk_code, self._shift_pressed, caps_lock)
+            logger.info('[DEBUG] Keypress: VK=%d, EN="%s", HE="%s", Shift=%s, Caps=%s',
+                        vk_code, en_ch, he_ch, self._shift_pressed, caps_lock)
 
         # 3. Handle Backspace (undo last buffer entry)
         if vk_code == VK_BACK:

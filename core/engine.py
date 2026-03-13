@@ -17,13 +17,14 @@ logger = logging.getLogger(__name__)
 class EvaluationEngine:
     """Evaluates whether a layout switch should occur."""
 
-    def __init__(self, en_model, he_model, collisions_path=None):
+    def __init__(self, en_model, he_model, collisions_path=None, storage_dir=None):
         """Initialize with trigram models and optional collision set.
 
         Args:
             en_model: TrigramModel for English.
             he_model: TrigramModel for Hebrew.
             collisions_path: Path to collisions.json (shadow-collision set).
+            storage_dir: Base directory for stats and logs (defaults to project data/ folder).
         """
         self.en_model = en_model
         self.he_model = he_model
@@ -34,11 +35,14 @@ class EvaluationEngine:
                 self.collisions = set(json.load(f))
 
         # Setup CSV logging
-        self.stats_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            'data',
-            'decision_stats.csv'
-        )
+        if storage_dir:
+            self.stats_path = os.path.join(storage_dir, 'decision_stats.csv')
+        else:
+            self.stats_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                'data',
+                'decision_stats.csv'
+            )
         self.stats_lock = threading.Lock()
         self._pending_logs = []
         self._logs_since_check = 0

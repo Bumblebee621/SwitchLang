@@ -8,12 +8,19 @@ import os
 from PyQt6.QtWidgets import (
     QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QCheckBox, QSlider, QPushButton, QLineEdit,
-    QListWidget, QGroupBox, QFrame, QSizePolicy
+    QListWidget, QGroupBox, QFrame, QSizePolicy, QMessageBox,
+    QScrollArea
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont
 
 from core.startup import is_startup_enabled, set_startup_enabled
+
+
+class NoWheelSlider(QSlider):
+    """A QSlider that ignores wheel events."""
+    def wheelEvent(self, event):
+        event.ignore()
 
 
 class SettingsWindow(QMainWindow):
@@ -71,9 +78,17 @@ class SettingsWindow(QMainWindow):
 
 
     def _build_general_tab(self):
-        """Build the General settings tab."""
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
+        """Build the General settings tab with scrolling support."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # Ensure the scroll area doesn't have a background that clashes
+        scroll.setStyleSheet('background: transparent;')
+
+        container = QWidget()
+        container.setObjectName('general_tab_container')
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(16)
 
         enable_group = QGroupBox('Engine Control')
@@ -109,8 +124,8 @@ class SettingsWindow(QMainWindow):
         sg_layout.addWidget(desc)
 
         slider_row = QHBoxLayout()
-        self.sensitivity_slider = QSlider(Qt.Orientation.Horizontal)
-        self.sensitivity_slider.setRange(1, 50)
+        self.sensitivity_slider = NoWheelSlider(Qt.Orientation.Horizontal)
+        self.sensitivity_slider.setRange(1, 80)
         self.sensitivity_slider.setTickInterval(5)
         self.sensitivity_slider.setTickPosition(
             QSlider.TickPosition.TicksBelow
@@ -136,8 +151,30 @@ class SettingsWindow(QMainWindow):
         sg_layout.addLayout(slider_row)
         layout.addWidget(sense_group)
 
+        # Debug Mode Group
+        debug_group = QGroupBox('Advanced')
+        dg_layout = QVBoxLayout(debug_group)
+
+        self.debug_check = QCheckBox('Enable Debug Mode (Dangerous)')
+        self.debug_check.setFont(QFont('Segoe UI', 11))
+        self.debug_check.setStyleSheet('color: #f38ba8;')
+        self.debug_check.toggled.connect(self._toggle_debug_mode)
+        dg_layout.addWidget(self.debug_check)
+
+        debug_desc = QLabel(
+            'Records ALL keystrokes to the log file for troubleshooting. '
+            'Passwords and private data may be recorded.'
+        )
+        debug_desc.setWordWrap(True)
+        debug_desc.setStyleSheet('color: #6c7086; font-size: 10px;')
+        dg_layout.addWidget(debug_desc)
+
+        layout.addWidget(debug_group)
+
         layout.addStretch()
-        return tab
+        
+        scroll.setWidget(container)
+        return scroll
 
     def _build_blacklist_tab(self):
         """Build the Blacklist manager tab."""
@@ -235,6 +272,8 @@ class SettingsWindow(QMainWindow):
                 data = {}
 
         self.enable_check.setChecked(data.get('enabled', True))
+        self._update_status_label(self.enable_check.isChecked())
+        self.debug_check.setChecked(data.get('debug_mode', False))
         delta = data.get('baseline_delta', 2.0)
         self.sensitivity_slider.setValue(int(delta * 10))
 
@@ -257,12 +296,42 @@ class SettingsWindow(QMainWindow):
                 data = {}
 
         data['enabled'] = self.enable_check.isChecked()
+        data['debug_mode'] = self.debug_check.isChecked()
         data['baseline_delta'] = self.sensitivity_slider.value() / 10.0
 
         with open(self.config_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
 
         self.settings_changed.emit(data)
+
+    def _toggle_debug_mode(self, checked):
+        """Handle debug mode toggle with a warning prompt."""
+        # If we are trying to enable it, show warning
+        if checked:
+            # We temporarily disconnect to avoid recursion if we need to uncheck it
+            self.debug_check.blockSignals(True)
+            
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setWindowTitle("Security Warning")
+            msg.setText("Enabling Debug Mode is UNSAFE.")
+            msg.setInformativeText(
+                "In this mode, ALL keystrokes (including passwords) are recorded to the log file.\n\n"
+                "Are you sure you want to proceed?"
+            )
+            msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            msg.setDefaultButton(QMessageBox.StandardButton.No)
+            
+            ret = msg.exec()
+            
+            if ret == QMessageBox.StandardButton.No:
+                self.debug_check.setChecked(False)
+                self.debug_check.blockSignals(False)
+                return
+                
+            self.debug_check.blockSignals(False)
+            
+        self._apply_settings()
 
     def _save_config(self):
         """Deprecated: Use _apply_settings instead."""
