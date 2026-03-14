@@ -68,7 +68,7 @@ logger = logging.getLogger('switchlang')
 
 from PyQt6.QtWidgets import QApplication
 
-from core.trigram import load_models
+from core.quadgram import load_models
 from core.engine import EvaluationEngine
 from core.sensitivity import SensitivityManager
 from core.blacklist import BlacklistManager, DEFAULT_BLACKLIST
@@ -114,15 +114,15 @@ def load_stylesheet():
 
 
 def check_data_files():
-    """Check that trigram data files exist. If not, generate them."""
-    en_path = os.path.join(DATA_DIR, 'en_trigrams.json')
-    he_path = os.path.join(DATA_DIR, 'he_trigrams.json')
+    """Check that quadgram data files exist. If not, generate them."""
+    en_path = os.path.join(DATA_DIR, 'en_quadgrams.json')
+    he_path = os.path.join(DATA_DIR, 'he_quadgrams.json')
 
     if not os.path.exists(en_path) or not os.path.exists(he_path):
-        print('Trigram data files not found. Generating...')
+        print('Quadgram data files not found. Generating...')
         scripts_dir = os.path.join(APP_DIR, 'scripts')
         sys.path.insert(0, scripts_dir)
-        from build_trigrams import main as build_main
+        from build_quadgrams import main as build_main
         build_main()
         sys.path.pop(0)
         print()

@@ -9,7 +9,7 @@ SwitchLang runs silently in the system tray, intercepts keystrokes, and uses an 
 
 ## Features
 - **Zero-Latency Hook:** Uses low-level Windows APIs (`WH_KEYBOARD_LL`).
-- **Probabilistic Engine:** Character-level trigram scoring to minimize false positives.
+- **Probabilistic Engine:** Character-level quadgram scoring to minimize false positives.
 - **Dynamic Sensitivity:** Threshold adapts dynamically based on context breaks (window focus change, mouse clicks, idle timeout, manual layout toggles).
 - **Concurrency-Safe:** Queues physical keystrokes during the layout switch.
 - **Diagnostics:** Auto-rotating application logs and CSV decision tracking.
@@ -30,7 +30,7 @@ python -m venv .venv
 pip install -r requirements.txt
 
 # 3. Generate initial JSON n-gram models
-python scripts/build_trigrams.py
+python scripts/build_quadgrams.py
 
 # 4. Start the application
 python main.py

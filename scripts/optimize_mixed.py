@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from core.engine import EvaluationEngine
 from core.sensitivity import SensitivityManager
-from core.trigram import load_models
+from core.quadgram import load_models
 from core.keymap import EN_TO_HE_FULL, HE_TO_EN_FULL
 
 def en_to_he(c):
@@ -201,7 +201,7 @@ _he_model = None
 
 def init_worker(data_dir):
     global _en_model, _he_model
-    from core.trigram import load_models
+    from core.quadgram import load_models
     _en_model, _he_model = load_models(data_dir)
 
 def worker(args):

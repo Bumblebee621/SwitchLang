@@ -1,11 +1,11 @@
 """
-build_trigrams.py — Offline script to generate trigram frequency tables.
+build_quadgrams.py — Offline script to generate quadgram frequency tables.
 
-This script generates pre-computed trigram and bigram frequency tables
-for English and Hebrew, suitable for the TrigramModel scorer.
+This script generates pre-computed quadgram, trigram, and bigram frequency tables
+for English and Hebrew, suitable for the QuadgramModel scorer.
 
 Usage:
-    python scripts/build_trigrams.py
+    python scripts/build_quadgrams.py
 
 The script uses built-in representative text samples to create the
 frequency tables. For production use, replace these with larger
@@ -19,8 +19,8 @@ from collections import Counter
 import download_corpora
 
 
-def build_trigrams_from_file(file_path):
-    """Build trigram and bigram frequency counts from a large text file.
+def build_quadgrams_from_file(file_path):
+    """Build quadgram, trigram, and bigram frequency counts from a large text file.
     
     Streams the file line by line to prevent memory exhaustion.
 
@@ -28,7 +28,7 @@ def build_trigrams_from_file(file_path):
         file_path: Path to the plain text corpus.
 
     Returns:
-        Dict with 'trigram_counts', 'bigram_counts', 'vocab_size'.
+        Dict with 'quadgram_counts', 'trigram_counts', 'bigram_counts', 'vocab_size'.
     """
     quadgram_counts = Counter()
     trigram_counts = Counter()
@@ -89,9 +89,9 @@ def main():
         print("Downloading corpora...")
         download_corpora.main()
 
-    print('Building English trigram model (this may take a minute depending on corpus size)...')
-    en_data = build_trigrams_from_file(en_txt_path)
-    en_path = os.path.join(data_dir, 'en_trigrams.json')
+    print('Building English quadgram model (this may take a minute depending on corpus size)...')
+    en_data = build_quadgrams_from_file(en_txt_path)
+    en_path = os.path.join(data_dir, 'en_quadgrams.json')
     with open(en_path, 'w', encoding='utf-8') as f:
         json.dump(en_data, f, ensure_ascii=False, indent=2)
     print(f'  Quadgrams: {len(en_data["quadgram_counts"])}')
@@ -101,9 +101,9 @@ def main():
     print(f'  Saved to: {en_path}')
 
     print()
-    print('Building Hebrew trigram model (this may take a minute depending on corpus size)...')
-    he_data = build_trigrams_from_file(he_txt_path)
-    he_path = os.path.join(data_dir, 'he_trigrams.json')
+    print('Building Hebrew quadgram model (this may take a minute depending on corpus size)...')
+    he_data = build_quadgrams_from_file(he_txt_path)
+    he_path = os.path.join(data_dir, 'he_quadgrams.json')
     with open(he_path, 'w', encoding='utf-8') as f:
         json.dump(he_data, f, ensure_ascii=False, indent=2)
     print(f'  Quadgrams: {len(he_data["quadgram_counts"])}')
@@ -122,7 +122,7 @@ def main():
     print(f'  Saved to: {collision_path}')
 
     print()
-    print('Done! Trigram data files have been generated.')
+    print('Done! Quadgram data files have been generated.')
 
 
 if __name__ == '__main__':

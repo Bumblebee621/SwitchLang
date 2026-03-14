@@ -1,7 +1,7 @@
 """
-trigram.py — Character-level trigram language model with Laplace smoothing.
+quadgram.py — Character-level quadgram language model with Laplace smoothing.
 
-Loads pre-computed trigram/bigram counts from JSON and scores strings
+Loads pre-computed quadgram/trigram/bigram counts from JSON and scores strings
 by computing log-probability under the model.
 """
 
@@ -10,15 +10,16 @@ import math
 import os
 
 
-class TrigramModel:
-    """Character-level trigram scorer with Laplace (add-1) smoothing."""
+class QuadgramModel:
+    """Character-level quadgram scorer with Laplace (add-1) smoothing."""
 
     def __init__(self, json_path):
-        """Load trigram data from a JSON file.
+        """Load quadgram data from a JSON file.
 
         Expected JSON structure:
         {
-            "trigram_counts": {"abc": 100, ...},
+            "quadgram_counts": {"abcd": 100, ...},
+            "trigram_counts": {"abc": 500, ...},
             "bigram_counts": {"ab": 500, ...},
             "vocab_size": 30
         }
@@ -43,11 +44,11 @@ class TrigramModel:
     def score(self, text):
         """Compute the log-probability score of a string.
 
-        Uses the trigram model with Laplace smoothing:
-        P(c3 | c1, c2) = (Count(c1,c2,c3) + 1) / (Count(c1,c2) + V)
+        Uses the quadgram model with Laplace smoothing:
+        P(c4 | c1, c2, c3) = (Count(c1,c2,c3,c4) + 1) / (Count(c1,c2,c3) + V)
 
-        For strings shorter than 3 characters, uses a simplified
-        bigram/unigram fallback.
+        For strings shorter than 4 characters, uses a simplified
+        trigram/bigram/unigram fallback.
 
         Args:
             text: The string to score.
@@ -105,7 +106,7 @@ class TrigramModel:
             new_char: The new character to score.
 
         Returns:
-            float log-probability increment for this trigram.
+            float log-probability increment for this quadgram.
         """
         if len(prev2) < 2:
             return 0.0
@@ -124,15 +125,15 @@ class TrigramModel:
 
 
 def load_models(data_dir):
-    """Load both English and Hebrew trigram models.
+    """Load both English and Hebrew quadgram models.
 
     Args:
         data_dir: Path to the data/ directory containing
-                  en_trigrams.json and he_trigrams.json.
+                  en_quadgrams.json and he_quadgrams.json.
 
     Returns:
-        Tuple (en_model, he_model) of TrigramModel instances.
+        Tuple (en_model, he_model) of QuadgramModel instances.
     """
-    en_path = os.path.join(data_dir, 'en_trigrams.json')
-    he_path = os.path.join(data_dir, 'he_trigrams.json')
-    return TrigramModel(en_path), TrigramModel(he_path)
+    en_path = os.path.join(data_dir, 'en_quadgrams.json')
+    he_path = os.path.join(data_dir, 'he_quadgrams.json')
+    return QuadgramModel(en_path), QuadgramModel(he_path)

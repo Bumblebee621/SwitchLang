@@ -19,7 +19,7 @@ from typing import Optional
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s]: %(message)s')
 logger = logging.getLogger(__name__)
 
-# Number of lines to read from the corpus (1,000,000 lines should be plenty for strong trigrams)
+# Number of lines to read from the corpus (1,000,000 lines should be plenty for strong quadgrams)
 MAX_LINES_PER_LANG = 1_000_000
 
 # Base URL to the OPUS OpenSubtitles raw mono text files
@@ -42,7 +42,7 @@ def stream_corpus(lang: str, out_txt_path: str, max_lines: int) -> None:
                 with open(out_txt_path, 'wb') as f_out:
                     for line in gz:
                         # Optional: Add any filtering for extremely short or noisy subtitle lines here if needed.
-                        # For trigrams, raw text is perfectly fine as is.
+                        # For quadgrams, raw text is perfectly fine as is.
                         f_out.write(line)
                         lines_written += 1
                         

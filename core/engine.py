@@ -2,7 +2,7 @@
 engine.py — Two-tier evaluation pipeline.
 
 Tier 1: O(1) dictionary exclusion via shadow-collision hash set.
-Tier 2: Trigram probabilistic model scoring.
+Tier 2: Quadgram probabilistic model scoring.
 """
 
 import csv
@@ -23,11 +23,11 @@ class EvaluationEngine:
     MAX_CSV_LINES = 10000
 
     def __init__(self, en_model, he_model, collisions_path=None, storage_dir=None, enable_logging=True):
-        """Initialize with trigram models and optional collision set.
+        """Initialize with quadgram models and optional collision set.
 
         Args:
-            en_model: TrigramModel for English.
-            he_model: TrigramModel for Hebrew.
+            en_model: QuadgramModel for English.
+            he_model: QuadgramModel for Hebrew.
             collisions_path: Path to collisions.json (shadow-collision set).
             storage_dir: Base directory for stats and logs (defaults to project data/ folder).
             enable_logging: Whether to log decisions to a CSV file.
