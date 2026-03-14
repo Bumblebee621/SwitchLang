@@ -330,13 +330,6 @@ class HookManager:
         # Reset sensitivity timer on every active keystroke
         self.sensitivity.record_keystroke()
 
-        # Log keystrokes if debug mode is active
-        if self.debug_mode:
-            caps_lock = _is_caps_lock_on()
-            en_ch, he_ch = get_both_chars(vk_code, self._shift_pressed, caps_lock)
-            logger.info('[DEBUG] Keypress: VK=%d, EN="%s", HE="%s", Shift=%s, Caps=%s',
-                        vk_code, en_ch, he_ch, self._shift_pressed, caps_lock)
-
         # 3. Handle Backspace (undo last buffer entry)
         if vk_code == VK_BACK:
             if self.buffer_active:

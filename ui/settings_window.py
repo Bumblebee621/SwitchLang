@@ -114,7 +114,7 @@ class SettingsWindow(QMainWindow):
 
         sense_group = QGroupBox('Sensitivity')
         sg_layout = QVBoxLayout(sense_group)
-
+        
         desc = QLabel(
             'Lower values = more aggressive switching.\n'
             'Higher values = more conservative (fewer false positives).'
@@ -161,9 +161,11 @@ class SettingsWindow(QMainWindow):
         self.debug_check.toggled.connect(self._toggle_debug_mode)
         dg_layout.addWidget(self.debug_check)
 
+        STORAGE_DIR = os.path.join(os.getenv('APPDATA'), 'SwitchLang')
         debug_desc = QLabel(
             'Records ALL keystrokes to the log file for troubleshooting. '
             'Passwords and private data may be recorded.'
+            f'.SCV and .log fills can be found in {STORAGE_DIR}'
         )
         debug_desc.setWordWrap(True)
         debug_desc.setStyleSheet('color: #6c7086; font-size: 10px;')
