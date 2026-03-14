@@ -9,16 +9,87 @@ from PyQt6.QtWidgets import (
     QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QCheckBox, QSlider, QPushButton, QLineEdit,
     QListWidget, QGroupBox, QFrame, QSizePolicy, QMessageBox,
-    QScrollArea
+    QScrollArea, QSpinBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont, QIcon
+from PyQt6.QtGui import QFont, QIcon, QKeyEvent
 
 from core.startup import is_startup_enabled, set_startup_enabled
+
+# Map Windows VK codes to human-readable names
+VK_NAME_MAP = {
+    0x08: 'Backspace', 0x09: 'Tab', 0x0D: 'Enter', 0x1B: 'Esc',
+    0x20: 'Space', 0x21: 'PgUp', 0x22: 'PgDn', 0x23: 'End', 0x24: 'Home',
+    0x25: 'Left', 0x26: 'Up', 0x27: 'Right', 0x28: 'Down',
+    0x2D: 'Insert', 0x2E: 'Delete',
+    0x30: '0', 0x31: '1', 0x32: '2', 0x33: '3', 0x34: '4',
+    0x35: '5', 0x36: '6', 0x37: '7', 0x38: '8', 0x39: '9',
+    0x41: 'A', 0x42: 'B', 0x43: 'C', 0x44: 'D', 0x45: 'E',
+    0x46: 'F', 0x47: 'G', 0x48: 'H', 0x49: 'I', 0x4A: 'J',
+    0x4B: 'K', 0x4C: 'L', 0x4D: 'M', 0x4E: 'N', 0x4F: 'O',
+    0x50: 'P', 0x51: 'Q', 0x52: 'R', 0x53: 'S', 0x54: 'T',
+    0x55: 'U', 0x56: 'V', 0x57: 'W', 0x58: 'X', 0x59: 'Y', 0x5A: 'Z',
+    0x60: 'Num0', 0x61: 'Num1', 0x62: 'Num2', 0x63: 'Num3', 0x64: 'Num4',
+    0x65: 'Num5', 0x66: 'Num6', 0x67: 'Num7', 0x68: 'Num8', 0x69: 'Num9',
+    0x6A: 'Num*', 0x6B: 'Num+', 0x6D: 'Num-', 0x6E: 'Num.', 0x6F: 'Num/',
+    0x70: 'F1', 0x71: 'F2', 0x72: 'F3', 0x73: 'F4', 0x74: 'F5',
+    0x75: 'F6', 0x76: 'F7', 0x77: 'F8', 0x78: 'F9', 0x79: 'F10',
+    0x7A: 'F11', 0x7B: 'F12',
+    0xFF: 'Fn', # Some laptop drivers map Fn here
+    0xBA: ';', 0xBB: '=', 0xBC: ',', 0xBD: '-', 0xBE: '.', 0xBF: '/',
+    0xC0: '`', 0xDB: '[', 0xDC: '\\', 0xDD: ']', 0xDE: "'",
+}
+
+# Map Qt key codes to Windows VK codes
+_QT_TO_VK = {
+    Qt.Key.Key_Backspace: 0x08, Qt.Key.Key_Tab: 0x09,
+    Qt.Key.Key_Return: 0x0D, Qt.Key.Key_Escape: 0x1B,
+    Qt.Key.Key_Space: 0x20,
+    Qt.Key.Key_PageUp: 0x21, Qt.Key.Key_PageDown: 0x22,
+    Qt.Key.Key_End: 0x23, Qt.Key.Key_Home: 0x24,
+    Qt.Key.Key_Left: 0x25, Qt.Key.Key_Up: 0x26,
+    Qt.Key.Key_Right: 0x27, Qt.Key.Key_Down: 0x28,
+    Qt.Key.Key_Insert: 0x2D, Qt.Key.Key_Delete: 0x2E,
+    Qt.Key.Key_F1: 0x70, Qt.Key.Key_F2: 0x71, Qt.Key.Key_F3: 0x72,
+    Qt.Key.Key_F4: 0x73, Qt.Key.Key_F5: 0x74, Qt.Key.Key_F6: 0x75,
+    Qt.Key.Key_F7: 0x76, Qt.Key.Key_F8: 0x77, Qt.Key.Key_F9: 0x78,
+    Qt.Key.Key_F10: 0x79, Qt.Key.Key_F11: 0x7A, Qt.Key.Key_F12: 0x7B,
+}
+# A-Z
+for i in range(26):
+    _QT_TO_VK[Qt.Key(Qt.Key.Key_A.value + i)] = 0x41 + i
+# 0-9
+for i in range(10):
+    _QT_TO_VK[Qt.Key(Qt.Key.Key_0.value + i)] = 0x30 + i
+
+VK_CONTROL = 0x11
+VK_SHIFT = 0x10
+VK_MENU = 0x12  # Alt
+
+
+def vk_list_to_label(vk_list):
+    """Convert a list of VK codes to a human-readable label like 'Ctrl+F12'."""
+    if not vk_list:
+        return 'Not set'
+    parts = []
+    modifiers_order = [(VK_CONTROL, 'Ctrl'), (VK_SHIFT, 'Shift'), (VK_MENU, 'Alt')]
+    remaining = set(vk_list)
+    for vk, name in modifiers_order:
+        if vk in remaining:
+            parts.append(name)
+            remaining.discard(vk)
+    for vk in sorted(remaining):
+        parts.append(VK_NAME_MAP.get(vk, f'0x{vk:02X}'))
+    return ' + '.join(parts)
 
 
 class NoWheelSlider(QSlider):
     """A QSlider that ignores wheel events."""
+    def wheelEvent(self, event):
+        event.ignore()
+
+class NoWheelSpinBox(QSpinBox):
+    """A QSpinBox that ignores wheel events."""
     def wheelEvent(self, event):
         event.ignore()
 
@@ -154,6 +225,49 @@ class SettingsWindow(QMainWindow):
         sg_layout.addLayout(slider_row)
         layout.addWidget(sense_group)
 
+        # Suspension Group
+        suspend_group = QGroupBox('Suspend Hotkey')
+        susp_layout = QVBoxLayout(suspend_group)
+
+        susp_desc = QLabel(
+            'Press a key combination to temporarily pause auto-switching.\n'
+            'Press the same hotkey again to resume early.'
+        )
+        susp_desc.setWordWrap(True)
+        susp_desc.setStyleSheet('color: #6c7086; font-size: 11px;')
+        susp_layout.addWidget(susp_desc)
+
+        key_row = QHBoxLayout()
+        key_row.addWidget(QLabel('Keybind:'))
+
+        self._suspend_vks = []  # Current recorded VK list
+        self._recording_keybind = False
+
+        self.keybind_btn = QPushButton('Not set')
+        self.keybind_btn.setFixedHeight(30)
+        self.keybind_btn.clicked.connect(self._start_keybind_recording)
+        key_row.addWidget(self.keybind_btn)
+
+        clear_btn = QPushButton('Clear keybind')
+        clear_btn.setFixedHeight(30)
+        clear_btn.setToolTip('Clear keybind')
+        clear_btn.clicked.connect(self._clear_keybind)
+        key_row.addWidget(clear_btn)
+
+        susp_layout.addLayout(key_row)
+
+        dur_row = QHBoxLayout()
+        dur_row.addWidget(QLabel('Duration (seconds):'))
+        self.suspend_duration_spin = NoWheelSpinBox()
+        self.suspend_duration_spin.setRange(5, 300)
+        self.suspend_duration_spin.setValue(60)
+        self.suspend_duration_spin.setSuffix(' s')
+        self.suspend_duration_spin.valueChanged.connect(self._apply_settings)
+        dur_row.addWidget(self.suspend_duration_spin)
+        susp_layout.addLayout(dur_row)
+
+        layout.addWidget(suspend_group)
+
         # Debug Mode Group
         debug_group = QGroupBox('Advanced')
         dg_layout = QVBoxLayout(debug_group)
@@ -166,9 +280,9 @@ class SettingsWindow(QMainWindow):
 
         STORAGE_DIR = os.path.join(os.getenv('APPDATA'), 'SwitchLang')
         debug_desc = QLabel(
-            'Records ALL keystrokes to the log file for troubleshooting. '
-            'Passwords and private data may be recorded.'
-            f'.SCV and .log fills can be found in {STORAGE_DIR}'
+            'Records ALL keystrokes to the log file for troubleshooting.\n'
+            'Passwords and private data may be recorded.\n'
+            f'.SCV and .log files can be found in {STORAGE_DIR}'
         )
         debug_desc.setWordWrap(True)
         debug_desc.setStyleSheet('color: #6c7086; font-size: 10px;')
@@ -282,6 +396,11 @@ class SettingsWindow(QMainWindow):
         delta = data.get('baseline_delta', 2.0)
         self.sensitivity_slider.setValue(int(delta * 10))
 
+        # Suspension
+        self._suspend_vks = data.get('suspend_keybind_vks', [])
+        self.keybind_btn.setText(vk_list_to_label(self._suspend_vks))
+        self.suspend_duration_spin.setValue(data.get('suspend_duration_sec', 60))
+
         self.blacklist_widget.clear()
         for exe in self.blacklist_manager.get_list():
             self.blacklist_widget.addItem(exe)
@@ -303,6 +422,8 @@ class SettingsWindow(QMainWindow):
         data['enabled'] = self.enable_check.isChecked()
         data['debug_mode'] = self.debug_check.isChecked()
         data['baseline_delta'] = self.sensitivity_slider.value() / 10.0
+        data['suspend_keybind_vks'] = self._suspend_vks
+        data['suspend_duration_sec'] = self.suspend_duration_spin.value()
 
         with open(self.config_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
@@ -337,6 +458,58 @@ class SettingsWindow(QMainWindow):
             self.debug_check.blockSignals(False)
             
         self._apply_settings()
+
+    def _start_keybind_recording(self):
+        """Enter the recording state to capture a new hotkey."""
+        self._recording_keybind = True
+        self.keybind_btn.setText('Recording...')
+        self.keybind_btn.setStyleSheet('background-color: #f9e2af; color: #11111b; font-weight: bold;')
+        self.setFocus() # Ensure window captures keys
+
+    def _clear_keybind(self):
+        """Reset the suspension hotkey."""
+        self._suspend_vks = []
+        self.keybind_btn.setText('Not set')
+        self.keybind_btn.setStyleSheet('')
+        self._apply_settings()
+
+    def keyPressEvent(self, event: QKeyEvent):
+        """Intercept keys while recording to capture the suspension hotkey."""
+        if not self._recording_keybind:
+            super().keyPressEvent(event)
+            return
+
+        key = event.key()
+        
+        # Don't capture modifiers on their own as the final trigger
+        if key in (Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta):
+            return
+
+        # Map Qt key + modifiers to VK codes
+        vks = []
+        mods = event.modifiers()
+        if mods & Qt.KeyboardModifier.ControlModifier:
+            vks.append(VK_CONTROL)
+        if mods & Qt.KeyboardModifier.ShiftModifier:
+            vks.append(VK_SHIFT)
+        if mods & Qt.KeyboardModifier.AltModifier:
+            vks.append(VK_MENU)
+        
+        # Map the primary key
+        vk = _QT_TO_VK.get(key)
+        if vk is not None:
+            vks.append(vk)
+        else:
+            # Fallback for keys not in our map (like some Fn keys or special media keys)
+            # Qt sometimes returns native scan codes or synthetic keys
+            vks.append(key & 0xFF) # Rough mapping for unknown keys
+
+        self._suspend_vks = vks
+        self._recording_keybind = False
+        self.keybind_btn.setText(vk_list_to_label(vks))
+        self.keybind_btn.setStyleSheet('')
+        self._apply_settings()
+        self.clearFocus()
 
     def _save_config(self):
         """Deprecated: Use _apply_settings instead."""

@@ -173,6 +173,11 @@ def on_settings_changed(config_data, hook_manager, sensitivity):
     hook_manager.idle_timeout = config_data.get(
         'idle_timeout_seconds', 5.0
     )
+    # Suspension Config
+    hook_manager.set_suspend_config(
+        config_data.get('suspend_keybind_vks', []),
+        config_data.get('suspend_duration_sec', 60)
+    )
 
 
 def main():
@@ -241,6 +246,9 @@ def main():
     settings_window.settings_changed.connect(
         tray.update_from_settings
     )
+
+    # UI Notifications from Hooks
+    hook_manager.set_on_suspend_callback(tray.notify_suspension)
 
     hook_manager.start()
 

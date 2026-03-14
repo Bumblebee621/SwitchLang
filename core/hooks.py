@@ -225,12 +225,23 @@ class HookManager:
 
         self._shift_pressed = False
         self._ctrl_pressed = False
+        self._alt_pressed = False
         self._on_switch_callback = None
 
         # PERFORMANCE optimization: Cache expensive Windows API results.
         # These are updated on a slow 100ms polling thread.
         self._cached_layout = 'en'
         self._cached_blacklisted = False
+
+        # Suspension: user-configurable hotkey to temporarily disable the engine.
+        # suspend_keybind is a frozenset of VK codes (e.g. {VK_CONTROL, 0x7B} for Ctrl+F12).
+        # Empty set = feature not configured.
+        self._suspend_keybind = frozenset(
+            config.get('suspend_keybind_vks', [])
+        )
+        self._suspend_duration = config.get('suspend_duration_sec', 60)
+        self._suspended_until = 0.0       # monotonic timestamp
+        self._on_suspend_callback = None
 
     def set_enabled(self, enabled):
         """Enable or disable the engine logic (tray-accessible)."""
@@ -246,6 +257,59 @@ class HookManager:
     def set_on_switch_callback(self, callback):
         """Set a callback for when a layout switch occurs (e.g. for UI sounds)."""
         self._on_switch_callback = callback
+
+    def set_on_suspend_callback(self, callback):
+        """Set a callback for when the engine is suspended/resumed (e.g. for UI)."""
+        self._on_suspend_callback = callback
+
+    def set_suspend_config(self, keybind_vks, duration_sec):
+        """Update the suspension hotkey and duration at runtime.
+
+        Args:
+            keybind_vks: List of VK codes forming the combination (can be empty).
+            duration_sec: Suspension duration in seconds.
+        """
+        self._suspend_keybind = frozenset(keybind_vks)
+        self._suspend_duration = duration_sec
+
+    @property
+    def is_suspended(self):
+        """True if the engine is currently in a temporary suspension."""
+        return time.monotonic() < self._suspended_until
+
+    def _check_suspend_hotkey(self, vk):
+        """Check if the current modifier+key state matches the suspend keybind.
+
+        Returns:
+            True if the hotkey was just triggered (and suspension toggled).
+        """
+        if not self._suspend_keybind:
+            return False
+
+        # Build the set of currently held keys
+        currently_held = set()
+        if self._ctrl_pressed:
+            currently_held.add(VK_CONTROL)
+        if self._shift_pressed:
+            currently_held.add(VK_SHIFT)
+        if self._alt_pressed:
+            currently_held.add(VK_MENU)
+        currently_held.add(vk)
+
+        if currently_held == self._suspend_keybind:
+            if self.is_suspended:
+                # Cancel current suspension
+                self._suspended_until = 0.0
+                logger.info('Suspension cancelled by hotkey')
+            else:
+                self._suspended_until = time.monotonic() + self._suspend_duration
+                self._clear_buffers()
+                self._clear_history()
+                logger.info('Engine suspended for %d seconds', self._suspend_duration)
+            if self._on_suspend_callback:
+                self._on_suspend_callback(self.is_suspended)
+            return True
+        return False
 
     def _set_correcting(self, val):
         """Internal lock flag setter used by the Switcher thread."""
@@ -315,8 +379,11 @@ class HookManager:
                     self.pending_queue.append((vk_code, self._shift_pressed, caps_lock))
             return True # Block keys so they don't interleave with correction injection.
 
-        # 2. Skip logic if global disable, blacklist, or modifier combos (Ctrl+C)
+        # 2. Skip logic if global disable, suspension, blacklist, or modifier combos (Ctrl+C)
         if not self.enabled:
+            return False
+
+        if self.is_suspended:
             return False
 
         if self._cached_blacklisted:
@@ -553,18 +620,26 @@ class HookManager:
                         self._shift_pressed = True
                     elif vk in (VK_CONTROL, VK_LCONTROL, VK_RCONTROL):
                         self._ctrl_pressed = True
+                    elif vk in (VK_MENU, VK_LMENU, VK_RMENU):
+                        self._alt_pressed = True
                     elif vk in MODIFIER_VKS:
                         pass
                     else:
-                        block = self._handle_keypress(vk)
-                        if block:
-                            return 1 # Stop the key from reaching the original app.
+                        # Check suspend hotkey before normal processing
+                        if self._check_suspend_hotkey(vk):
+                            pass  # Let the key through, we just toggled suspension
+                        else:
+                            block = self._handle_keypress(vk)
+                            if block:
+                                return 1 # Stop the key from reaching the original app.
                 else:
                     # KEY UP events
                     if vk in (VK_SHIFT, VK_LSHIFT, VK_RSHIFT):
                         self._shift_pressed = False
                     elif vk in (VK_CONTROL, VK_LCONTROL, VK_RCONTROL):
                         self._ctrl_pressed = False
+                    elif vk in (VK_MENU, VK_LMENU, VK_RMENU):
+                        self._alt_pressed = False
         except Exception:
             logger.exception('Error in keyboard hook callback')
 

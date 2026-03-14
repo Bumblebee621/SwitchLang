@@ -114,6 +114,26 @@ class SystemTrayApp(QSystemTrayIcon):
                 1500
             )
 
+    def notify_suspension(self, suspended):
+        """Show a tray notification when engine suspension state changes."""
+        if suspended:
+            # Note: access private duration for display
+            dur = self.hook_manager._suspend_duration
+            self.showMessage(
+                'SwitchLang Suspended',
+                f'Auto-switching paused for {dur} seconds.\n'
+                'Press hotkey again to resume.',
+                QSystemTrayIcon.MessageIcon.Warning,
+                3000
+            )
+        else:
+            self.showMessage(
+                'SwitchLang Resumed',
+                'Auto-switching has resumed.',
+                QSystemTrayIcon.MessageIcon.Information,
+                2000
+            )
+
     def _quit(self):
         """Quit the application."""
         self.hook_manager.stop()
