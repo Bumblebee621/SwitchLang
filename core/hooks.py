@@ -262,8 +262,6 @@ class HookManager:
         CRITICAL: This is called on every Context Resumption Event (CRE) to
         prevent retroactive corrections from jumping across windows or clicks.
         """
-        if self.history_deque:
-            logger.debug('Clearing history deque (%d entries)', len(self.history_deque))
         self.history_deque.clear()
 
     def _build_correction_block(self):
