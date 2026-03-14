@@ -26,6 +26,7 @@ class TrigramModel:
         with open(json_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
+        self.quadgram_counts = data.get('quadgram_counts', {})
         self.trigram_counts = data.get('trigram_counts', {})
         self.bigram_counts = data.get('bigram_counts', {})
         self.vocab_size = data.get('vocab_size', 30)
@@ -68,19 +69,27 @@ class TrigramModel:
             log_prob = math.log((count + 1) / (total + v))
             return log_prob
 
+        if len(text) == 3:
+            trigram = text
+            bigram = text[:2]
+            tri_count = self.trigram_counts.get(trigram, 0)
+            bi_count = self.bigram_counts.get(bigram, 0)
+            log_prob = math.log((tri_count + 1) / (bi_count + v))
+            return log_prob
+
         # Base the score heavily on the absolute probability of the first bigram
         first_bigram = text[:2]
         bi_comp_count = self.bigram_counts.get(first_bigram, 0)
         log_prob = math.log((bi_comp_count + 1) / (self.total_bigrams + (v ** 2)))
 
-        for i in range(len(text) - 2):
+        for i in range(len(text) - 3):
+            quadgram = text[i:i + 4]
             trigram = text[i:i + 3]
-            bigram = text[i:i + 2]
 
+            quad_count = self.quadgram_counts.get(quadgram, 0)
             tri_count = self.trigram_counts.get(trigram, 0)
-            bi_count = self.bigram_counts.get(bigram, 0)
 
-            prob = (tri_count + 1) / (bi_count + v)
+            prob = (quad_count + 1) / (tri_count + v)
             log_prob += math.log(prob)
 
         return log_prob
@@ -104,14 +113,14 @@ class TrigramModel:
         prev2 = prev2.lower()
         new_char = new_char.lower()
 
-        trigram = prev2 + new_char
-        bigram = prev2
+        quadgram = prev2 + new_char
+        trigram = prev2
 
+        quad_count = self.quadgram_counts.get(quadgram, 0)
         tri_count = self.trigram_counts.get(trigram, 0)
-        bi_count = self.bigram_counts.get(bigram, 0)
         v = self.vocab_size
 
-        return math.log((tri_count + 1) / (bi_count + v))
+        return math.log((quad_count + 1) / (tri_count + v))
 
 
 def load_models(data_dir):

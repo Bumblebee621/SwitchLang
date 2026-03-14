@@ -30,6 +30,7 @@ def build_trigrams_from_file(file_path):
     Returns:
         Dict with 'trigram_counts', 'bigram_counts', 'vocab_size'.
     """
+    quadgram_counts = Counter()
     trigram_counts = Counter()
     bigram_counts = Counter()
     chars = set()
@@ -54,6 +55,12 @@ def build_trigrams_from_file(file_path):
                     continue
 
                 word = ' ' + word + ' '
+                # Extract quadgrams
+                for i in range(len(word) - 3):
+                    quadgram = word[i:i + 4]
+                    quadgram_counts[quadgram] += 1
+                
+                # Extract trigrams and bigrams for fallbacks
                 for i in range(len(word) - 2):
                     trigram = word[i:i + 3]
                     bigram = word[i:i + 2]
@@ -61,6 +68,7 @@ def build_trigrams_from_file(file_path):
                     bigram_counts[bigram] += 1
 
     return {
+        'quadgram_counts': dict(quadgram_counts),
         'trigram_counts': dict(trigram_counts),
         'bigram_counts': dict(bigram_counts),
         'vocab_size': len(chars) + 1  # +1 for space
@@ -86,9 +94,10 @@ def main():
     en_path = os.path.join(data_dir, 'en_trigrams.json')
     with open(en_path, 'w', encoding='utf-8') as f:
         json.dump(en_data, f, ensure_ascii=False, indent=2)
-    print(f'  Trigrams: {len(en_data["trigram_counts"])}')
-    print(f'  Bigrams:  {len(en_data["bigram_counts"])}')
-    print(f'  Vocab:    {en_data["vocab_size"]}')
+    print(f'  Quadgrams: {len(en_data["quadgram_counts"])}')
+    print(f'  Trigrams:  {len(en_data["trigram_counts"])}')
+    print(f'  Bigrams:   {len(en_data["bigram_counts"])}')
+    print(f'  Vocab:     {en_data["vocab_size"]}')
     print(f'  Saved to: {en_path}')
 
     print()
@@ -97,9 +106,10 @@ def main():
     he_path = os.path.join(data_dir, 'he_trigrams.json')
     with open(he_path, 'w', encoding='utf-8') as f:
         json.dump(he_data, f, ensure_ascii=False, indent=2)
-    print(f'  Trigrams: {len(he_data["trigram_counts"])}')
-    print(f'  Bigrams:  {len(he_data["bigram_counts"])}')
-    print(f'  Vocab:    {he_data["vocab_size"]}')
+    print(f'  Quadgrams: {len(he_data["quadgram_counts"])}')
+    print(f'  Trigrams:  {len(he_data["trigram_counts"])}')
+    print(f'  Bigrams:   {len(he_data["bigram_counts"])}')
+    print(f'  Vocab:     {he_data["vocab_size"]}')
     print(f'  Saved to: {he_path}')
 
     print()
