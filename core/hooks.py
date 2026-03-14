@@ -461,16 +461,17 @@ class HookManager:
 
         # Only run mid-word scoring after 3+ characters to avoid false switches.
         if len(self.buffer_active) >= 3:
-            should_switch, diff, is_ambig = self.engine.evaluate(
+            should_switch, diff, is_ambiguous = self.engine.evaluate(
                 self.buffer_active,
                 self.buffer_shadow,
                 self.sensitivity.delta,
                 current_layout=current
             )
             logger.debug(
-                'Eval: diff=%.2f delta=%.2f switch=%s',
-                diff, self.sensitivity.delta, should_switch
-            )
+                    'EVAL: "%s" (%s) -> "%s" | diff=%+.2f vs delta=%.2f | switch=%s | ambiguous=%s',
+                    self.buffer_active, current, self.buffer_shadow, diff,
+                    self.sensitivity.delta, should_switch, is_ambiguous
+                )
             
             caps_lock = _is_caps_lock_on()
             needs_caps_fix = current == 'he' and caps_lock and not should_switch
@@ -689,7 +690,6 @@ class HookManager:
     def _on_mouse_click(self, x, y, button, pressed):
         """Mouse click callback — triggers a Context Resumption Event (CRE)."""
         if pressed and button != pynput_mouse.Button.middle:
-            logger.debug('--- Mouse Click: Context Resumption Event ---')
             self.sensitivity.reset(reason='mouse_click')
             self._clear_buffers()
             self._clear_history()
@@ -729,7 +729,6 @@ class HookManager:
                 # 3. Detect Foreground Window changes (Trigger CRE)
                 hwnd = user32.GetForegroundWindow()
                 if self.sensitivity.check_window_change(hwnd):
-                    logger.debug('--- Window Change: Context Resumption Event ---')
                     self.sensitivity.reset(reason='window_change')
                     self._clear_buffers()
                     self._clear_history()
@@ -740,7 +739,6 @@ class HookManager:
                     self.sensitivity.record_keystroke() # Prevent infinite reset loop
                     self._clear_buffers()
                     self._clear_history()
-                    logger.debug('Idle timeout — reset sensitivity')
 
             except Exception:
                 logger.exception('Error in foreground poll')
