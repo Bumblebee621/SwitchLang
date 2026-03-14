@@ -65,6 +65,3 @@ python main.py
 
 Settings can be accessed by right-clicking the SwitchLang icon in the system tray.
 
-## Architecture
-
-For details on the core system design and evaluation pipeline, see `Game Plan.txt`.
