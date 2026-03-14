@@ -191,6 +191,13 @@ def main():
         print("SwitchLang is already running.")
         sys.exit(0)
 
+    # Set AppUserModelID so Windows taskbar groups windows by this ID instead of python.exe
+    try:
+        myappid = u'Bumblebee621.SwitchLang.v1' 
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+    except Exception:
+        pass
+
     check_data_files()
 
     config = load_config()
@@ -222,9 +229,9 @@ def main():
     if stylesheet:
         app.setStyleSheet(stylesheet)
 
-    settings_window = SettingsWindow(CONFIG_PATH, blacklist)
-
     icon_path = os.path.join(DATA_DIR, 'icon.png')
+    settings_window = SettingsWindow(CONFIG_PATH, blacklist, icon_path)
+
     tray = SystemTrayApp(settings_window, hook_manager, icon_path=icon_path)
     tray.show()
 

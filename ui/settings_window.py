@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QScrollArea
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QIcon
 
 from core.startup import is_startup_enabled, set_startup_enabled
 
@@ -28,10 +28,13 @@ class SettingsWindow(QMainWindow):
 
     settings_changed = pyqtSignal(dict)
 
-    def __init__(self, config_path, blacklist_manager, parent=None):
+    def __init__(self, config_path, blacklist_manager, icon_path, parent=None):
         super().__init__(parent)
         self.config_path = config_path
         self.blacklist_manager = blacklist_manager
+
+        if icon_path and os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
 
         # Guard: timer is created inside _build_blacklist_tab; initialise
         # to None here so closeEvent is safe even if construction fails.
