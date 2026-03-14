@@ -238,8 +238,9 @@ class HookManager:
         logger.info('Engine %s', 'enabled' if enabled else 'disabled')
 
     def set_debug_mode(self, enabled):
-        """Enable or disable raw keystroke logging."""
+        """Enable or disable debug mode (expressive logging + CSV)."""
         self.debug_mode = enabled
+        self.engine.set_enable_logging(enabled)
         logger.info('Debug Mode %s', 'enabled' if enabled else 'disabled')
 
     def set_on_switch_callback(self, callback):

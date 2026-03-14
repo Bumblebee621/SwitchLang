@@ -56,6 +56,16 @@ class EvaluationEngine:
         if self.enable_logging:
             self._ensure_stats_file()
 
+    def set_enable_logging(self, enabled):
+        """Toggle CSV decision logging at runtime.
+
+        Args:
+            enabled: True to start writing to the CSV, False to stop.
+        """
+        self.enable_logging = enabled
+        if enabled:
+            self._ensure_stats_file()
+
     def _ensure_stats_file(self):
         """Ensure the stats CSV exists with headers."""
         if not os.path.exists(self.stats_path):

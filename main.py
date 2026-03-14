@@ -51,20 +51,46 @@ class LineRotatingFileHandler(logging.Handler):
         except Exception:
             self.handleError(record)
 
-# Configure logging — INFO to file, INFO to console
+# Configure logging — console-only by default (WARNING level).
+# Debug mode (toggled by the user) adds a file handler and switches to DEBUG.
+_LOG_FORMAT = '%(asctime)s [%(name)s] %(levelname)s: %(message)s'
+_log_file_handler = None   # Lazy-created when debug mode is enabled
+
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
-    handlers=[
-        LineRotatingFileHandler(
-            os.path.join(STORAGE_DIR, 'switchlang.log'),
-            max_lines=1000, encoding='utf-8'
-        ),
-        logging.StreamHandler(sys.stdout)
-    ]
+    level=logging.WARNING,
+    format=_LOG_FORMAT,
+    handlers=[logging.StreamHandler(sys.stdout)]
 )
-logging.getLogger('switchlang.hooks').setLevel(logging.INFO)
 logger = logging.getLogger('switchlang')
+
+
+def set_debug_mode(enabled):
+    """Toggle expressive logging (file + DEBUG level) on or off.
+
+    When *enabled* is True, attaches a LineRotatingFileHandler to the root
+    logger and drops every ``switchlang.*`` logger to DEBUG.  When False,
+    removes the file handler and restores WARNING level so the app stays
+    completely silent on disk.
+    """
+    global _log_file_handler
+    root = logging.getLogger()
+
+    if enabled:
+        # Attach file handler (once)
+        if _log_file_handler is None:
+            _log_file_handler = LineRotatingFileHandler(
+                os.path.join(STORAGE_DIR, 'switchlang.log'),
+                max_lines=1000, encoding='utf-8'
+            )
+            _log_file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+        if _log_file_handler not in root.handlers:
+            root.addHandler(_log_file_handler)
+        root.setLevel(logging.DEBUG)
+    else:
+        # Remove file handler and silence disk output
+        if _log_file_handler and _log_file_handler in root.handlers:
+            root.removeHandler(_log_file_handler)
+        root.setLevel(logging.WARNING)
 
 from PyQt6.QtWidgets import QApplication
 
@@ -136,8 +162,10 @@ def on_settings_changed(config_data, hook_manager, sensitivity):
         hook_manager: HookManager instance.
         sensitivity: SensitivityManager instance.
     """
+    debug = config_data.get('debug_mode', False)
+    set_debug_mode(debug)
     hook_manager.set_enabled(config_data.get('enabled', True))
-    hook_manager.set_debug_mode(config_data.get('debug_mode', False))
+    hook_manager.set_debug_mode(debug)
     sensitivity.update_config(
         baseline_delta=config_data.get('baseline_delta', 2.0),
         alpha=config_data.get('sensitivity_alpha', 0.3)
@@ -167,9 +195,16 @@ def main():
 
     config = load_config()
 
+    # Apply initial debug_mode from config
+    debug = config.get('debug_mode', False)
+    set_debug_mode(debug)
+
     en_model, he_model = load_models(DATA_DIR)
 
-    engine = EvaluationEngine(en_model, he_model, COLLISIONS_PATH, storage_dir=STORAGE_DIR)
+    engine = EvaluationEngine(
+        en_model, he_model, COLLISIONS_PATH,
+        storage_dir=STORAGE_DIR, enable_logging=debug
+    )
 
     sensitivity = SensitivityManager(
         baseline_delta=config.get('baseline_delta', 2.0),
