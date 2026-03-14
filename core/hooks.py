@@ -65,6 +65,7 @@ VK_SPACE = 0x20
 VK_BACK = 0x08
 VK_TAB = 0x09
 VK_CAPITAL = 0x14
+VK_A = 0x41   # Used for Ctrl+A CRE
 
 MODIFIER_VKS = {
     VK_SHIFT, VK_LSHIFT, VK_RSHIFT,
@@ -390,6 +391,10 @@ class HookManager:
             return False
 
         if self._ctrl_pressed:
+            if vk_code == VK_A:
+                self.sensitivity.reset(reason='ctrl+a')
+                self._clear_buffers()
+                self._clear_history()
             return False
 
         # Reset sensitivity timer on every active keystroke
