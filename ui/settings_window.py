@@ -40,28 +40,6 @@ VK_NAME_MAP = {
     0xC0: '`', 0xDB: '[', 0xDC: '\\', 0xDD: ']', 0xDE: "'",
 }
 
-# Map Qt key codes to Windows VK codes
-_QT_TO_VK = {
-    Qt.Key.Key_Backspace: 0x08, Qt.Key.Key_Tab: 0x09,
-    Qt.Key.Key_Return: 0x0D, Qt.Key.Key_Escape: 0x1B,
-    Qt.Key.Key_Space: 0x20,
-    Qt.Key.Key_PageUp: 0x21, Qt.Key.Key_PageDown: 0x22,
-    Qt.Key.Key_End: 0x23, Qt.Key.Key_Home: 0x24,
-    Qt.Key.Key_Left: 0x25, Qt.Key.Key_Up: 0x26,
-    Qt.Key.Key_Right: 0x27, Qt.Key.Key_Down: 0x28,
-    Qt.Key.Key_Insert: 0x2D, Qt.Key.Key_Delete: 0x2E,
-    Qt.Key.Key_F1: 0x70, Qt.Key.Key_F2: 0x71, Qt.Key.Key_F3: 0x72,
-    Qt.Key.Key_F4: 0x73, Qt.Key.Key_F5: 0x74, Qt.Key.Key_F6: 0x75,
-    Qt.Key.Key_F7: 0x76, Qt.Key.Key_F8: 0x77, Qt.Key.Key_F9: 0x78,
-    Qt.Key.Key_F10: 0x79, Qt.Key.Key_F11: 0x7A, Qt.Key.Key_F12: 0x7B,
-}
-# A-Z
-for i in range(26):
-    _QT_TO_VK[Qt.Key(Qt.Key.Key_A.value + i)] = 0x41 + i
-# 0-9
-for i in range(10):
-    _QT_TO_VK[Qt.Key(Qt.Key.Key_0.value + i)] = 0x30 + i
-
 VK_CONTROL = 0x11
 VK_SHIFT = 0x10
 VK_MENU = 0x12  # Alt
@@ -495,14 +473,13 @@ class SettingsWindow(QMainWindow):
         if mods & Qt.KeyboardModifier.AltModifier:
             vks.append(VK_MENU)
         
-        # Map the primary key
-        vk = _QT_TO_VK.get(key)
-        if vk is not None:
+        # Map the primary key using native virtual key (layout-independent on Windows)
+        vk = event.nativeVirtualKey()
+        if vk:
             vks.append(vk)
         else:
-            # Fallback for keys not in our map (like some Fn keys or special media keys)
-            # Qt sometimes returns native scan codes or synthetic keys
-            vks.append(key & 0xFF) # Rough mapping for unknown keys
+            # Fallback for keys where nativeVirtualKey might be 0
+            vks.append(key & 0xFF)
 
         self._suspend_vks = vks
         self._recording_keybind = False
