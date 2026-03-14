@@ -76,9 +76,25 @@ class INPUT(ctypes.Structure):
 
 _EXTRA_INFO = ctypes.pointer(ctypes.c_ulong(0))
 
+class GUITHREADINFO(ctypes.Structure):
+    """GUI thread information used to detect focused control properties."""
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("flags", wintypes.DWORD),
+        ("hwndActive", wintypes.HWND),
+        ("hwndFocus", wintypes.HWND),
+        ("hwndCapture", wintypes.HWND),
+        ("hwndMenuOwner", wintypes.HWND),
+        ("hwndMoveSize", wintypes.HWND),
+        ("hwndCaret", wintypes.HWND),
+        ("rcCaret", wintypes.RECT)
+    ]
+
 # Set argtypes and restype for critical user32 functions
 user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
 user32.SendInput.restype = wintypes.UINT
+user32.GetGUIThreadInfo.argtypes = [wintypes.DWORD, ctypes.POINTER(GUITHREADINFO)]
+user32.GetGUIThreadInfo.restype = wintypes.BOOL
 
 
 def _make_key_input(vk=0, scan=0, flags=0):
@@ -204,7 +220,15 @@ def toggle_layout(target_layout):
     user32.PostMessageW(hwnd, WM_INPUTLANGCHANGEREQUEST, 0, hkl)
     
     # Wait for the layout to actually change to prevent race conditions
-    thread_id = user32.GetWindowThreadProcessId(hwnd, None)
+    # We check the thread of the focused component if possible, as it's the priority
+    gui_info = GUITHREADINFO(cbSize=ctypes.sizeof(GUITHREADINFO))
+    thread_id = 0
+    if user32.GetGUIThreadInfo(0, ctypes.byref(gui_info)) and gui_info.hwndFocus:
+        thread_id = user32.GetWindowThreadProcessId(gui_info.hwndFocus, None)
+    
+    if not thread_id:
+        thread_id = user32.GetWindowThreadProcessId(hwnd, None)
+
     expected_primary = 0x09 if target_layout == 'en' else 0x0D
     
     for _ in range(10):  # Wait up to 100ms
@@ -217,12 +241,25 @@ def toggle_layout(target_layout):
 
 
 def get_current_layout():
-    """Detect the currently active keyboard layout."""
+    """Detect the currently active keyboard layout.
+    
+    This method prioritizes the thread of the actually focused control (via GetGUIThreadInfo)
+    to handle modern apps like Notepad where the foreground window thread might not 
+    reflect the active input locale.
+    """
     hwnd = user32.GetForegroundWindow()
     if not hwnd:
         return 'unknown'
 
-    thread_id = user32.GetWindowThreadProcessId(hwnd, None)
+    # Try to get the focused window thread for accurate layout in modern apps
+    gui_info = GUITHREADINFO(cbSize=ctypes.sizeof(GUITHREADINFO))
+    thread_id = 0
+    if user32.GetGUIThreadInfo(0, ctypes.byref(gui_info)) and gui_info.hwndFocus:
+        thread_id = user32.GetWindowThreadProcessId(gui_info.hwndFocus, None)
+    
+    if not thread_id:
+        thread_id = user32.GetWindowThreadProcessId(hwnd, None)
+
     hkl = user32.GetKeyboardLayout(thread_id)
     lang_id = hkl & 0xFFFF
     primary_lang = lang_id & 0x03FF
