@@ -19,8 +19,8 @@ from typing import Optional
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s]: %(message)s')
 logger = logging.getLogger(__name__)
 
-# Number of lines to read from the corpus (1,000,000 lines should be plenty for strong quadgrams)
-MAX_LINES_PER_LANG = 1_000_000
+# Number of lines to read from the corpus (10,000,000 lines should be plenty for strong quadgrams)
+MAX_LINES_PER_LANG = 10_000_000
 
 # Base URL to the OPUS OpenSubtitles raw mono text files
 OPUS_URL_TEMPLATE = "https://object.pouta.csc.fi/OPUS-OpenSubtitles/v2018/mono/{lang}.txt.gz"
@@ -54,7 +54,10 @@ def stream_corpus(lang: str, out_txt_path: str, max_lines: int) -> None:
                             
         print()
         elapsed = time.time() - start_time
-        logger.info(f"Successfully wrote {lines_written:,} lines for '{lang}' to {out_txt_path} in {elapsed:.1f}s.")
+        if lines_written < max_lines:
+            logger.warning(f"Corpus for '{lang}' ended early. Only {lines_written:,} lines available (requested {max_lines:,}).")
+        else:
+            logger.info(f"Successfully wrote {lines_written:,} lines for '{lang}' to {out_txt_path} in {elapsed:.1f}s.")
         
     except Exception as e:
         logger.error(f"Error downloading or processing '{lang}' corpus: {e}")
@@ -69,13 +72,16 @@ def main():
         txt_path = os.path.join(data_dir, f'{lang}_corpus.txt')
         
         # Check if we already have a reasonably sized text file
-        # We delete it if it is the old Wikipedia text (~17MB max text size)
+        # 10M lines of subtitles is roughly 300MB+; 20MB is definitely an old/small corpus.
         if os.path.exists(txt_path):
-            if os.path.getsize(txt_path) < 20_000_000:
-                logger.info(f"Removing old small corpus '{txt_path}' to replace with OpenSubtitles...")
+            current_size = os.path.getsize(txt_path)
+            # Threshold: ~20 bytes per line for 10M lines = 200MB. 
+            # If it's smaller than that, it's likely incomplete for the new 10M target.
+            if current_size < 200_000_000:
+                logger.info(f"Removing old/incomplete corpus '{txt_path}' ({current_size // 1_000_000} MB) to reach {MAX_LINES_PER_LANG:,} line target...")
                 os.remove(txt_path)
             else:
-                logger.info(f"Corpus for '{lang}' already exists ({os.path.getsize(txt_path) // 1000000} MB). Skipping.")
+                logger.info(f"Corpus for '{lang}' already exists ({current_size // 1_000_000} MB). Skipping.")
                 continue
             
         logger.info(f"Downloading OpenSubtitles corpus for {lang.upper()}...")
