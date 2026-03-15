@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 100_000  # Lines per process
 
-def _process_chunk(lines):
+def _process_chunk(lines, allowed_chars=None):
     """Worker function to process a list of lines and return n-gram counts."""
     quadgram_counts = Counter()
     trigram_counts = Counter()
@@ -30,14 +30,20 @@ def _process_chunk(lines):
         if not line:
             continue
 
-        for ch in line:
-            if not ch.isspace():
-                chars.add(ch)
-
         words = line.split()
         for word in words:
+            # Word-level purity check:
+            # If a word contains characters outside the allowed set, discard it.
+            # This ensures the model isn't poisoned by foreign scripts or noise.
+            if allowed_chars is not None:
+                if any(ch not in allowed_chars for ch in word):
+                    continue
+
             if len(word) > 12:
                 continue
+
+            for ch in word:
+                chars.add(ch)
 
             word = ' ' + word + ' '
             n = len(word)
@@ -56,7 +62,7 @@ def _process_chunk(lines):
 
     return quadgram_counts, trigram_counts, bigram_counts, chars
 
-def build_quadgrams_from_file_parallel(file_path):
+def build_quadgrams_from_file_parallel(file_path, allowed_chars=None):
     """Build n-gram models using multiple CPU cores."""
     total_quads = Counter()
     total_tris = Counter()
@@ -75,11 +81,11 @@ def build_quadgrams_from_file_parallel(file_path):
             for line in f:
                 chunk.append(line)
                 if len(chunk) >= CHUNK_SIZE:
-                    futures.append(executor.submit(_process_chunk, chunk))
+                    futures.append(executor.submit(_process_chunk, chunk, allowed_chars))
                     chunk = []
             
             if chunk:
-                futures.append(executor.submit(_process_chunk, chunk))
+                futures.append(executor.submit(_process_chunk, chunk, allowed_chars))
 
             # Collect and merge results as they become available for better throughput
             total_chunks = len(futures)
@@ -104,6 +110,13 @@ def build_quadgrams_from_file_parallel(file_path):
         'vocab_size': len(total_chars) + 1  # +1 for space
     }
 
+# Allowed character sets for each language to ensure model purity.
+# We include standard English/Hebrew letters and common punctuation.
+# We explicitly EXCLUDE numbers and accented characters (like è, é) to 
+# keep the models focused on the primary layout scripts.
+ALLOWED_EN = set("abcdefghijklmnopqrstuvwxyz `~!@#$%^&*()-_=+[{]}\\|;:'\",<.>/?")
+ALLOWED_HE = set("אבגדהוזחטיכלמנסעפצקרשתםןץףך `~!@#$%^&*()-_=+[{]}\\|;:'\",<.>/?")
+
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_dir = os.path.dirname(script_dir)
@@ -122,7 +135,7 @@ def main():
 
     # English
     logger.info("Processing English corpus...")
-    en_data = build_quadgrams_from_file_parallel(en_txt_path)
+    en_data = build_quadgrams_from_file_parallel(en_txt_path, allowed_chars=ALLOWED_EN)
     en_path = os.path.join(data_dir, 'en_quadgrams.json')
     with open(en_path, 'w', encoding='utf-8') as f:
         json.dump(en_data, f, ensure_ascii=False, indent=2)
@@ -130,7 +143,7 @@ def main():
 
     # Hebrew
     logger.info("Processing Hebrew corpus...")
-    he_data = build_quadgrams_from_file_parallel(he_txt_path)
+    he_data = build_quadgrams_from_file_parallel(he_txt_path, allowed_chars=ALLOWED_HE)
     he_path = os.path.join(data_dir, 'he_quadgrams.json')
     with open(he_path, 'w', encoding='utf-8') as f:
         json.dump(he_data, f, ensure_ascii=False, indent=2)
