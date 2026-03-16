@@ -129,14 +129,24 @@ def load_config():
 
 
 def load_stylesheet():
-    """Load the QSS stylesheet.
+    """Load the QSS stylesheet and fix relative resource paths.
 
     Returns:
         QSS string or empty string if file not found.
     """
     if os.path.exists(STYLE_PATH):
         with open(STYLE_PATH, 'r', encoding='utf-8') as f:
-            return f.read()
+            content = f.read()
+            
+            # Fix relative resource paths for PyInstaller bundling.
+            # Convert url("ui/...") and url("data/...") to use absolute paths 
+            # based on BUNDLE_DIR so they resolve correctly even when frozen.
+            # We use forward slashes because QSS expects them even on Windows.
+            safe_bundle_dir = BUNDLE_DIR.replace('\\', '/')
+            content = content.replace('url("ui/', f'url("{safe_bundle_dir}/ui/')
+            content = content.replace('url("data/', f'url("{safe_bundle_dir}/data/')
+            
+            return content
     return ''
 
 
