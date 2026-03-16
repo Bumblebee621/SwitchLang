@@ -9,12 +9,13 @@ from PyQt6.QtWidgets import (
     QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QCheckBox, QSlider, QPushButton, QLineEdit,
     QListWidget, QGroupBox, QFrame, QSizePolicy, QMessageBox,
-    QScrollArea, QSpinBox
+    QScrollArea, QSpinBox, QProgressBar, QDialog
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread
 from PyQt6.QtGui import QFont, QIcon, QKeyEvent
 
 from core.startup import is_startup_enabled, set_startup_enabled
+from core.updater import check_for_updates, download_and_install
 
 # Map Windows VK codes to human-readable names
 VK_NAME_MAP = {
@@ -72,15 +73,64 @@ class NoWheelSpinBox(QSpinBox):
         event.ignore()
 
 
+class UpdateWorker(QThread):
+    """Worker thread to check for updates without freezing UI."""
+    finished = pyqtSignal(str, str) # version, url
+
+    def run(self):
+        v, url = check_for_updates()
+        if v and url:
+            self.finished.emit(v, url)
+        else:
+            self.finished.emit("", "")
+
+class DownloadWorker(QThread):
+    """Worker thread to download and install updates."""
+    progress = pyqtSignal(int, int)
+    error = pyqtSignal(str)
+
+    def __init__(self, url):
+        super().__init__()
+        self.url = url
+
+    def run(self):
+        try:
+            download_and_install(self.url, progress_callback=self.progress.emit)
+        except Exception as e:
+            self.error.emit(str(e))
+
+class ProgressDialog(QDialog):
+    """Simple dialog showing download progress."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Downloading Update")
+        self.setFixedSize(300, 100)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
+        
+        layout = QVBoxLayout(self)
+        self.label = QLabel("Downloading SwitchLang...")
+        layout.addWidget(self.label)
+        
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        layout.addWidget(self.progress_bar)
+
+    def set_progress(self, current, total):
+        if total > 0:
+            val = int((current / total) * 100)
+            self.progress_bar.setValue(val)
+
+
 class SettingsWindow(QMainWindow):
     """Settings window accessible from the system tray."""
 
     settings_changed = pyqtSignal(dict)
 
-    def __init__(self, config_path, blacklist_manager, icon_path, parent=None):
+    def __init__(self, config_path, blacklist_manager, icon_path, version="1.0.0", parent=None):
         super().__init__(parent)
         self.config_path = config_path
         self.blacklist_manager = blacklist_manager
+        self.version = version
 
         if icon_path and os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
@@ -126,6 +176,7 @@ class SettingsWindow(QMainWindow):
         tabs = QTabWidget()
         tabs.addTab(self._build_general_tab(), 'General')
         tabs.addTab(self._build_blacklist_tab(), 'Blacklist')
+        tabs.addTab(self._build_about_tab(), 'About')
         layout.addWidget(tabs)
 
 
@@ -325,6 +376,94 @@ class SettingsWindow(QMainWindow):
 
         layout.addLayout(action_row)
         return tab
+
+    def _build_about_tab(self):
+        """Build the About/Update tab."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(20)
+        layout.setContentsMargins(30, 40, 30, 40)
+
+        # Version Info
+        version_label = QLabel(f'Version {self.version}')
+        version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        version_label.setStyleSheet('font-size: 16px; font-weight: bold; color: #89b4fa;')
+        layout.addWidget(version_label)
+
+        author_label = QLabel('Created by Ariel')
+        author_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        author_label.setStyleSheet('color: #6c7086;')
+        layout.addWidget(author_label)
+
+        layout.addSpacing(20)
+
+        # Update Section
+        self.update_btn = QPushButton('Check for Updates')
+        self.update_btn.setObjectName('primary_button')
+        self.update_btn.setFixedHeight(40)
+        self.update_btn.clicked.connect(self._check_updates)
+        layout.addWidget(self.update_btn)
+
+        self.update_status = QLabel('')
+        self.update_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.update_status.setStyleSheet('color: #a6adc8; font-size: 12px;')
+        layout.addWidget(self.update_status)
+
+        layout.addStretch()
+
+        # GitHub Link
+        github_label = QLabel('<a href="https://github.com/Bumblebee621/SwitchLang" style="color: #89b4fa; text-decoration: none;">GitHub Repository</a>')
+        github_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        github_label.setOpenExternalLinks(True)
+        layout.addWidget(github_label)
+
+        return tab
+
+    def _check_updates(self):
+        """Start the background update check."""
+        self.update_btn.setEnabled(False)
+        self.update_btn.setText("Checking...")
+        self.update_status.setText("")
+        
+        self._update_worker = UpdateWorker()
+        self._update_worker.finished.connect(self._on_update_check_finished)
+        self._update_worker.start()
+
+    def _on_update_check_finished(self, version, url):
+        """Handle the result of the update check."""
+        self.update_btn.setEnabled(True)
+        self.update_btn.setText("Check for Updates")
+        
+        if not version:
+            self.update_status.setText("You are using the latest version.")
+            return
+
+        # Update available
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.setWindowTitle("Update Available")
+        msg.setText(f"A new version is available: v{version}")
+        msg.setInformativeText("Would you like to download and install it now?")
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg.setDefaultButton(QMessageBox.StandardButton.Yes)
+        
+        if msg.exec() == QMessageBox.StandardButton.Yes:
+            self._start_download(url)
+
+    def _start_download(self, url):
+        """Start downloading the update."""
+        self._progress_dialog = ProgressDialog(self)
+        self._progress_dialog.show()
+        
+        self._download_worker = DownloadWorker(url)
+        self._download_worker.progress.connect(self._progress_dialog.set_progress)
+        self._download_worker.error.connect(self._on_download_error)
+        self._download_worker.start()
+
+    def _on_download_error(self, err_msg):
+        """Handle download errors."""
+        self._progress_dialog.close()
+        QMessageBox.critical(self, "Update Error", f"Failed to download update: {err_msg}")
 
     def _update_status_label(self, checked):
         """Update the status indicator when the toggle changes.

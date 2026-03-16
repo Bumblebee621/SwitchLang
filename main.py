@@ -99,6 +99,7 @@ from core.engine import EvaluationEngine
 from core.sensitivity import SensitivityManager
 from core.blacklist import BlacklistManager, DEFAULT_BLACKLIST
 from core.hooks import HookManager
+from core.version import __version__
 from ui.tray import SystemTrayApp
 from ui.settings_window import SettingsWindow
 
@@ -235,7 +236,7 @@ def main():
         app.setStyleSheet(stylesheet)
 
     icon_path = os.path.join(DATA_DIR, 'icon.png')
-    settings_window = SettingsWindow(CONFIG_PATH, blacklist, icon_path)
+    settings_window = SettingsWindow(CONFIG_PATH, blacklist, icon_path, version=__version__)
 
     tray = SystemTrayApp(settings_window, hook_manager, icon_path=icon_path)
     tray.show()

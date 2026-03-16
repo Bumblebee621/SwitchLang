@@ -20,6 +20,11 @@ def run_command(command, description):
         return False
 
 def create_installer():
+    # 0. Sync version from core/version.py to setup.iss
+    if not run_command("python scripts/sync_version.py", "Synchronizing version"):
+        print("Aborting: Version sync failed.")
+        return
+
     # 1. Run build.py to create the executable
     if not run_command("python build.py", "Building executable with PyInstaller"):
         print("Aborting: Build failed.")
