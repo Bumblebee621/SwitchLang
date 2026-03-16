@@ -74,8 +74,8 @@ MODIFIER_VKS = {
 }
 
 # Delimiters trigger word-level evaluation
-DELIMITER_VKS = {VK_SPACE, VK_RETURN, VK_TAB}
-DELIMITER_CHARS = {VK_SPACE: ' ', VK_RETURN: '\n', VK_TAB: '\t'}
+DELIMITER_VKS = {VK_SPACE, VK_RETURN}
+DELIMITER_CHARS = {VK_SPACE: ' ', VK_RETURN: '\n'}
 
 # Stores a completed word and its metadata for retroactive correction (Lookback)
 _WordEntry = collections.namedtuple(
@@ -397,6 +397,12 @@ class HookManager:
                 self._clear_history()
             return False
 
+        if vk_code == VK_TAB:
+            self.sensitivity.reset(reason='tab_key')
+            self._clear_buffers()
+            self._clear_history()
+            return False
+
         # Reset sensitivity timer on every active keystroke
         self.sensitivity.record_keystroke()
 
@@ -713,10 +719,6 @@ class HookManager:
                     if new_layout != 'unknown':
                         if new_layout != self._cached_layout:
                             # Manual change detected? Trigger CRE.
-                            logger.debug(
-                                'Manual layout change detected (%s -> %s) — triggering CRE',
-                                self._cached_layout, new_layout
-                            )
                             self.sensitivity.reset(reason='manual_layout_change')
                             self._clear_buffers()
                             self._clear_history()
