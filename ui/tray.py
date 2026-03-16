@@ -3,6 +3,7 @@ tray.py — System tray icon and context menu.
 """
 
 
+import webbrowser
 from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QApplication
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QAction
 from PyQt6.QtCore import Qt, QSize
@@ -60,8 +61,9 @@ class SystemTrayApp(QSystemTrayIcon):
         menu = QMenu()
 
         title_action = QAction('SwitchLang', menu)
-        title_action.setEnabled(False)
+        title_action.triggered.connect(self._show_GITHUB_repo)
         menu.addAction(title_action)
+
         menu.addSeparator()
 
         self.toggle_action = QAction('Disable', menu)
@@ -91,6 +93,9 @@ class SystemTrayApp(QSystemTrayIcon):
         self.settings_window.show()
         self.settings_window.activateWindow()
         self.settings_window.raise_()
+
+    def _show_GITHUB_repo(self):
+        webbrowser.open('https://github.com/Bumblebee621/SwitchLang')
 
     def _toggle_engine(self):
         """Toggle the engine on/off from the tray menu."""
