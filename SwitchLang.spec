@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('C:\\Users\\Ariel\\Documents\\Antigravity\\SwitchLang\\data', 'data'), ('C:\\Users\\Ariel\\Documents\\Antigravity\\SwitchLang\\ui', 'ui')],
+    datas=[('data', 'data'), ('ui', 'ui')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -35,5 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['C:\\Users\\Ariel\\Documents\\Antigravity\\SwitchLang\\data\\icon.ico'],
+    icon=['data\\icon.ico'],
 )
