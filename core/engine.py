@@ -162,16 +162,17 @@ class EvaluationEngine:
             or s_shadow.lower() in self.collisions
         )
 
-    def _score_text_en(self, text):
+    def _score_text_en(self, text, mode=None):
         """Score text using English model(s) based on current mode."""
+        effective_mode = mode if mode is not None else self.model_mode
         score_std = self.en_model.score(text)
-        if self.model_mode == 'technical' and self.en_so_model:
+        if effective_mode == 'technical' and self.en_so_model:
             score_so = self.en_so_model.score(text)
             return max(score_std, score_so)
         return score_std
 
     def evaluate(self, s_active, s_shadow, delta,
-                 current_layout='en', on_delimiter=False):
+                 current_layout='en', on_delimiter=False, mode=None):
         """Run the full evaluation pipeline.
 
         Args:
@@ -181,6 +182,7 @@ class EvaluationEngine:
             current_layout: 'en' or 'he' — the currently active layout.
             on_delimiter: Whether this evaluation is triggered by a
                           word delimiter (space, enter, etc.).
+            mode: Optional mode override ('standard' or 'technical').
 
         Returns:
             Tuple (should_switch: bool, score_diff: float, is_ambiguous: bool).
@@ -201,14 +203,14 @@ class EvaluationEngine:
 
         if current_layout == 'en':
             # Scoring as English
-            score_active = self._score_text_en(eval_active)
+            score_active = self._score_text_en(eval_active, mode=mode)
             # Scoring as Hebrew (Shadow)
             score_shadow = self.he_model.score(eval_shadow)
         else:
             # Scoring as Hebrew
             score_active = self.he_model.score(eval_active)
             # Scoring as English (Shadow)
-            score_shadow = self._score_text_en(eval_shadow)
+            score_shadow = self._score_text_en(eval_shadow, mode=mode)
 
         score_diff = score_shadow - score_active
         

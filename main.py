@@ -191,7 +191,9 @@ def on_settings_changed(config_data, hook_manager, sensitivity, engine):
         config_data.get('suspend_duration_sec', 60)
     )
     # Model Mode
-    engine.set_model_mode(config_data.get('model_mode', 'standard'))
+    mode = config_data.get('model_mode', 'standard')
+    engine.set_model_mode(mode)
+    hook_manager.set_model_mode(mode)
 
 
 def main():

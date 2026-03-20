@@ -233,6 +233,10 @@ class HookManager:
         # These are updated on a slow 100ms polling thread.
         self._cached_layout = 'en'
         self._cached_blacklisted = False
+        self._cached_is_ide_editor = False
+
+        # Model Mode Selection: 'standard', 'smart', or 'technical'
+        self.model_mode = config.get('model_mode', 'standard')
 
         # Suspension: user-configurable hotkey to temporarily disable the engine.
         # suspend_keybind is a frozenset of VK codes (e.g. {VK_CONTROL, 0x7B} for Ctrl+F12).
@@ -264,14 +268,15 @@ class HookManager:
         self._on_suspend_callback = callback
 
     def set_suspend_config(self, keybind_vks, duration_sec):
-        """Update the suspension hotkey and duration at runtime.
-
-        Args:
-            keybind_vks: List of VK codes forming the combination (can be empty).
-            duration_sec: Suspension duration in seconds.
-        """
+        """Update the suspension hotkey and duration at runtime."""
         self._suspend_keybind = frozenset(keybind_vks)
         self._suspend_duration = duration_sec
+
+    def set_model_mode(self, mode):
+        """Update the model selection mode (standard, smart, technical)."""
+        if mode in ('standard', 'smart', 'technical'):
+            self.model_mode = mode
+            logger.info('Model mode set to: %s', mode)
 
     @property
     def is_suspended(self):
@@ -419,12 +424,19 @@ class HookManager:
 
             if self.buffer_active:
                 current = self._cached_layout
+                
+                # Determine effective evaluation mode
+                eff_mode = self.model_mode
+                if eff_mode == 'smart':
+                    eff_mode = 'technical' if self._cached_is_ide_editor else 'standard'
+
                 should_switch, diff, is_ambiguous = self.engine.evaluate(
                     self.buffer_active,
                     self.buffer_shadow,
                     self.sensitivity.delta,
                     current_layout=current,
-                    on_delimiter=True
+                    on_delimiter=True,
+                    mode=eff_mode
                 )
                 
                 logger.debug(
@@ -472,11 +484,17 @@ class HookManager:
 
         # Only run mid-word scoring after 3+ characters to avoid false switches.
         if len(self.buffer_active) >= 3:
+            # Determine effective evaluation mode
+            eff_mode = self.model_mode
+            if eff_mode == 'smart':
+                eff_mode = 'technical' if self._cached_is_ide_editor else 'standard'
+
             should_switch, diff, is_ambiguous = self.engine.evaluate(
                 self.buffer_active,
                 self.buffer_shadow,
                 self.sensitivity.delta,
-                current_layout=current
+                current_layout=current,
+                mode=eff_mode
             )
             logger.debug(
                     'EVAL: "%s" (%s) -> "%s" | diff=%+.2f vs delta=%.2f | switch=%s | ambiguous=%s',
@@ -724,14 +742,16 @@ class HookManager:
                             self._clear_history()
                         self._cached_layout = new_layout
 
-                # 2. Update Blacklist Status
-                is_blacklisted = self.blacklist.is_blacklisted()
+                # 2. Update Blacklist and IDE Status
+                exe = self.blacklist.get_foreground_exe()
+                is_blacklisted = exe in self.blacklist.blacklisted
                 if not is_blacklisted:
                     try:
                         is_blacklisted = is_password_field_active()
                     except Exception as e:
                         logger.debug('Error checking password field: %s', e)
                 self._cached_blacklisted = is_blacklisted
+                self._cached_is_ide_editor = self.blacklist.is_ide_editor(exe)
 
                 # 3. Detect Foreground Window changes (Trigger CRE)
                 hwnd = user32.GetForegroundWindow()

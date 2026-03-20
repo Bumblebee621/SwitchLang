@@ -24,6 +24,24 @@ DEFAULT_BLACKLIST = {
     'bitwarden.exe', 'credentialuibroker.exe', 'consent.exe'
 }
 
+IDE_EXECUTABLES = {
+    # JetBrains
+    'pycharm64.exe', 'pycharm.exe', 'idea64.exe', 'idea.exe',
+    'webstorm64.exe', 'webstorm.exe', 'clion64.exe', 'clion.exe',
+    'datagrip64.exe', 'datagrip.exe', 'rider64.exe', 'rider.exe',
+    'rubymine64.exe', 'rubymine.exe', 'goland64.exe', 'goland.exe',
+    'phpstorm64.exe', 'phpstorm.exe', 'studio64.exe', 'studio.exe',
+    # Microsoft
+    'code.exe', 'insiders.exe', 'devenv.exe',
+    # Editors
+    'sublime_text.exe', 'notepad++.exe', 'notepad.exe',
+    'vim.exe', 'gvim.exe', 'nvim.exe', 'nvim-qt.exe',
+    # Others
+    'eclipse.exe', 'netbeans64.exe', 'netbeans.exe',
+    'codeblocks.exe', 'qtcreator.exe', 'spyder.exe',
+    'rstudio.exe', 'matlab.exe'
+}
+
 
 class BlacklistManager:
     """Manages the set of blacklisted exe names."""
@@ -138,6 +156,19 @@ class BlacklistManager:
         if result:
             logger.debug('Blacklisted app active: %s', exe)
         return result
+
+    def is_ide_editor(self, exe_name=None):
+        """Check if a process is an IDE or code editor.
+
+        Args:
+            exe_name: Optional exe name to check. If None, checks foreground app.
+
+        Returns:
+            True if the process is a recognized IDE/editor.
+        """
+        if exe_name is None:
+            exe_name = self.get_foreground_exe()
+        return exe_name.lower() in IDE_EXECUTABLES
 
     def get_list(self):
         """Get the sorted list of blacklisted executables.
