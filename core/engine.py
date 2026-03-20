@@ -22,18 +22,23 @@ class EvaluationEngine:
     MAX_CSV_SIZE_BYTES = 10 * 1024 * 1024
     MAX_CSV_LINES = 10000
 
-    def __init__(self, en_model, he_model, collisions_path=None, storage_dir=None, enable_logging=True):
+    def __init__(self, en_model, he_model, collisions_path=None, storage_dir=None, 
+                 enable_logging=True, en_so_model=None, model_mode='standard'):
         """Initialize with quadgram models and optional collision set.
 
         Args:
-            en_model: QuadgramModel for English.
+            en_model: QuadgramModel for Standard English.
             he_model: QuadgramModel for Hebrew.
             collisions_path: Path to collisions.json (shadow-collision set).
-            storage_dir: Base directory for stats and logs (defaults to project data/ folder).
+            storage_dir: Base directory for stats and logs.
             enable_logging: Whether to log decisions to a CSV file.
+            en_so_model: Optional QuadgramModel for Stack Overflow English.
+            model_mode: 'standard' or 'technical'.
         """
         self.en_model = en_model
         self.he_model = he_model
+        self.en_so_model = en_so_model
+        self.model_mode = model_mode
         self.enable_logging = enable_logging
 
         self.collisions = set()
@@ -56,12 +61,14 @@ class EvaluationEngine:
         if self.enable_logging:
             self._ensure_stats_file()
 
-    def set_enable_logging(self, enabled):
-        """Toggle CSV decision logging at runtime.
+    def set_model_mode(self, mode):
+        """Switch between standard and technical model modes."""
+        if mode in ('standard', 'technical'):
+            self.model_mode = mode
+            logger.info(f"Model mode switched to: {mode}")
 
-        Args:
-            enabled: True to start writing to the CSV, False to stop.
-        """
+    def set_enable_logging(self, enabled):
+        """Toggle CSV decision logging at runtime."""
         self.enable_logging = enabled
         if enabled:
             self._ensure_stats_file()
@@ -149,23 +156,19 @@ class EvaluationEngine:
                 logger.warning(f"Could not write to decision_stats.csv (is it open in Excel?): {e}")
 
     def check_collision(self, s_active, s_shadow):
-        """Tier 1: Check if either string is a known shadow collision.
-
-        Called on delimiter (space/punctuation). If the active buffer
-        IS a collision word, we should NOT switch because it could be
-        valid in either layout.
-
-        Args:
-            s_active: The string in the current OS layout.
-            s_shadow: The string mapped to the alternate layout.
-
-        Returns:
-            True if a collision is detected (do NOT switch).
-        """
+        """Tier 1: Check if either string is a known shadow collision."""
         return (
             s_active.lower() in self.collisions
             or s_shadow.lower() in self.collisions
         )
+
+    def _score_text_en(self, text):
+        """Score text using English model(s) based on current mode."""
+        score_std = self.en_model.score(text)
+        if self.model_mode == 'technical' and self.en_so_model:
+            score_so = self.en_so_model.score(text)
+            return max(score_std, score_so)
+        return score_std
 
     def evaluate(self, s_active, s_shadow, delta,
                  current_layout='en', on_delimiter=False):
@@ -189,8 +192,6 @@ class EvaluationEngine:
         is_ambig = self.check_collision(s_active, s_shadow)
         
         # Prepend a space because buffer_active always represents a word start.
-        # This leverages word-boundary statistics, penalizing internal n-grams like "nkl"
-        # when they appear at the beginning of a word.
         eval_active = ' ' + s_active
         eval_shadow = ' ' + s_shadow
 
@@ -199,11 +200,15 @@ class EvaluationEngine:
             eval_shadow += ' '
 
         if current_layout == 'en':
-            score_active = self.en_model.score(eval_active)
+            # Scoring as English
+            score_active = self._score_text_en(eval_active)
+            # Scoring as Hebrew (Shadow)
             score_shadow = self.he_model.score(eval_shadow)
         else:
+            # Scoring as Hebrew
             score_active = self.he_model.score(eval_active)
-            score_shadow = self.en_model.score(eval_shadow)
+            # Scoring as English (Shadow)
+            score_shadow = self._score_text_en(eval_shadow)
 
         score_diff = score_shadow - score_active
         

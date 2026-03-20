@@ -165,13 +165,14 @@ def check_data_files():
         print()
 
 
-def on_settings_changed(config_data, hook_manager, sensitivity):
+def on_settings_changed(config_data, hook_manager, sensitivity, engine):
     """Handle settings changes from the UI.
 
     Args:
         config_data: New configuration dict.
         hook_manager: HookManager instance.
         sensitivity: SensitivityManager instance.
+        engine: EvaluationEngine instance.
     """
     debug = config_data.get('debug_mode', False)
     set_debug_mode(debug)
@@ -189,6 +190,8 @@ def on_settings_changed(config_data, hook_manager, sensitivity):
         config_data.get('suspend_keybind_vks', []),
         config_data.get('suspend_duration_sec', 60)
     )
+    # Model Mode
+    engine.set_model_mode(config_data.get('model_mode', 'standard'))
 
 
 def main():
@@ -222,11 +225,13 @@ def main():
     debug = config.get('debug_mode', False)
     set_debug_mode(debug)
 
-    en_model, he_model = load_models(DATA_DIR)
+    models = load_models(DATA_DIR, load_so=True)
 
     engine = EvaluationEngine(
-        en_model, he_model, COLLISIONS_PATH,
-        storage_dir=STORAGE_DIR, enable_logging=debug
+        models['en'], models['he'], COLLISIONS_PATH,
+        storage_dir=STORAGE_DIR, enable_logging=debug,
+        en_so_model=models.get('so'),
+        model_mode=config.get('model_mode', 'standard')
     )
 
     sensitivity = SensitivityManager(
@@ -252,7 +257,7 @@ def main():
     tray.show()
 
     settings_window.settings_changed.connect(
-        lambda data: on_settings_changed(data, hook_manager, sensitivity)
+        lambda data: on_settings_changed(data, hook_manager, sensitivity, engine)
     )
     settings_window.settings_changed.connect(
         tray.update_from_settings

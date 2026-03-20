@@ -124,16 +124,27 @@ class QuadgramModel:
         return math.log((quad_count + 1) / (tri_count + v))
 
 
-def load_models(data_dir):
-    """Load both English and Hebrew quadgram models.
+def load_models(data_dir, load_so=False):
+    """Load English, Hebrew, and optionally Stack Overflow quadgram models.
 
     Args:
-        data_dir: Path to the data/ directory containing
-                  en_quadgrams.json and he_quadgrams.json.
+        data_dir: Path to the data/ directory.
+        load_so: Whether to also load the Stack Overflow model.
 
     Returns:
-        Tuple (en_model, he_model) of QuadgramModel instances.
+        Dict of {name: QuadgramModel} instances.
     """
     en_path = os.path.join(data_dir, 'en_quadgrams.json')
     he_path = os.path.join(data_dir, 'he_quadgrams.json')
-    return QuadgramModel(en_path), QuadgramModel(he_path)
+    
+    models = {
+        'en': QuadgramModel(en_path),
+        'he': QuadgramModel(he_path)
+    }
+    
+    if load_so:
+        so_path = os.path.join(data_dir, 'so_quadgrams.json')
+        if os.path.exists(so_path):
+            models['so'] = QuadgramModel(so_path)
+            
+    return models

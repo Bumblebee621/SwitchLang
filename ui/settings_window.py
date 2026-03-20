@@ -297,6 +297,30 @@ class SettingsWindow(QMainWindow):
 
         layout.addWidget(suspend_group)
 
+        # Language Model Group
+        model_group = QGroupBox('Language Model')
+        mg_layout = QVBoxLayout(model_group)
+
+        model_desc = QLabel(
+            'Standard: General conversational context (OpenSubtitles).\n'
+            'Technical: Enhanced for programming and technical terms (SO).'
+        )
+        model_desc.setWordWrap(True)
+        model_desc.setStyleSheet('color: #6c7086; font-size: 11px;')
+        mg_layout.addWidget(model_desc)
+
+        self.model_std_radio = QCheckBox('Standard (General)')
+        self.model_tech_radio = QCheckBox('Technical (Programming)')
+        
+        # Make them behave like radio buttons
+        self.model_std_radio.toggled.connect(self._on_model_std_toggled)
+        self.model_tech_radio.toggled.connect(self._on_model_tech_toggled)
+        
+        mg_layout.addWidget(self.model_std_radio)
+        mg_layout.addWidget(self.model_tech_radio)
+
+        layout.addWidget(model_group)
+
         # Debug Mode Group
         debug_group = QGroupBox('Advanced')
         dg_layout = QVBoxLayout(debug_group)
@@ -513,6 +537,15 @@ class SettingsWindow(QMainWindow):
         delta = data.get('baseline_delta', 2.0)
         self.sensitivity_slider.setValue(int(delta * 10))
 
+        # Model Mode
+        mode = data.get('model_mode', 'standard')
+        if mode == 'technical':
+            self.model_tech_radio.setChecked(True)
+            self.model_std_radio.setChecked(False)
+        else:
+            self.model_std_radio.setChecked(True)
+            self.model_tech_radio.setChecked(False)
+
         # Suspension
         self._suspend_vks = data.get('suspend_keybind_vks', [])
         self.keybind_btn.setText(vk_list_to_label(self._suspend_vks))
@@ -541,6 +574,7 @@ class SettingsWindow(QMainWindow):
         data['baseline_delta'] = self.sensitivity_slider.value() / 10.0
         data['suspend_keybind_vks'] = self._suspend_vks
         data['suspend_duration_sec'] = self.suspend_duration_spin.value()
+        data['model_mode'] = 'technical' if self.model_tech_radio.isChecked() else 'standard'
 
         with open(self.config_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
@@ -575,6 +609,32 @@ class SettingsWindow(QMainWindow):
             self.debug_check.blockSignals(False)
             
         self._apply_settings()
+
+    def _on_model_std_toggled(self, checked):
+        """Simulate radio button behavior for model selection."""
+        if checked:
+            self.model_tech_radio.blockSignals(True)
+            self.model_tech_radio.setChecked(False)
+            self.model_tech_radio.blockSignals(False)
+            self._apply_settings()
+        elif not self.model_tech_radio.isChecked():
+            # Don't allow unchecking both
+            self.model_std_radio.blockSignals(True)
+            self.model_std_radio.setChecked(True)
+            self.model_std_radio.blockSignals(False)
+
+    def _on_model_tech_toggled(self, checked):
+        """Simulate radio button behavior for model selection."""
+        if checked:
+            self.model_std_radio.blockSignals(True)
+            self.model_std_radio.setChecked(False)
+            self.model_std_radio.blockSignals(False)
+            self._apply_settings()
+        elif not self.model_std_radio.isChecked():
+            # Don't allow unchecking both
+            self.model_tech_radio.blockSignals(True)
+            self.model_tech_radio.setChecked(True)
+            self.model_tech_radio.blockSignals(False)
 
     def _start_keybind_recording(self):
         """Enter the recording state to capture a new hotkey."""
