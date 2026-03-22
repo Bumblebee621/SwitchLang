@@ -34,7 +34,6 @@ IDE_EXECUTABLES = {
     # Microsoft
     'code.exe', 'insiders.exe', 'devenv.exe',
     # Editors
-    'sublime_text.exe', 'notepad++.exe', 'notepad.exe',
     'vim.exe', 'gvim.exe', 'nvim.exe', 'nvim-qt.exe',
     # Others
     'eclipse.exe', 'netbeans64.exe', 'netbeans.exe',
@@ -54,6 +53,7 @@ class BlacklistManager:
         """
         self.config_path = config_path
         self.blacklisted = set()
+        self.tech_apps = set()
         self._load()
 
     def _load(self):
@@ -67,12 +67,17 @@ class BlacklistManager:
                 # If first time or empty, ensure defaults are added
                 if not self.blacklisted and not user_blacklist:
                     self.blacklisted.update(DEFAULT_BLACKLIST)
+                
+                user_tech_apps = data.get('tech_apps', [])
+                self.tech_apps = set(exe.lower() for exe in user_tech_apps)
             except json.JSONDecodeError:
                 logger.error('Malformed config file: %s — using default blacklist',
                              self.config_path)
                 self.blacklisted = set(DEFAULT_BLACKLIST)
+                self.tech_apps = set()
         else:
             self.blacklisted = set(DEFAULT_BLACKLIST)
+            self.tech_apps = set()
 
     def save(self):
         """Persist the current blacklist to config.json."""
@@ -88,6 +93,7 @@ class BlacklistManager:
             data = {}
 
         data['blacklist'] = sorted(self.blacklisted)
+        data['tech_apps'] = sorted(self.tech_apps)
 
         with open(self.config_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
@@ -164,11 +170,12 @@ class BlacklistManager:
             exe_name: Optional exe name to check. If None, checks foreground app.
 
         Returns:
-            True if the process is a recognized IDE/editor.
+            True if the process is a recognized IDE/editor or custom technical app.
         """
         if exe_name is None:
             exe_name = self.get_foreground_exe()
-        return exe_name.lower() in IDE_EXECUTABLES
+        exe_lower = exe_name.lower()
+        return exe_lower in IDE_EXECUTABLES or exe_lower in self.tech_apps
 
     def get_list(self):
         """Get the sorted list of blacklisted executables.
@@ -177,3 +184,17 @@ class BlacklistManager:
             Sorted list of exe names.
         """
         return sorted(self.blacklisted)
+
+    def add_tech_app(self, exe_name):
+        """Add an executable to the technical apps list."""
+        self.tech_apps.add(exe_name.lower())
+        self.save()
+
+    def remove_tech_app(self, exe_name):
+        """Remove an executable from the technical apps list."""
+        self.tech_apps.discard(exe_name.lower())
+        self.save()
+
+    def get_tech_apps_list(self):
+        """Get the sorted list of technical apps."""
+        return sorted(self.tech_apps)

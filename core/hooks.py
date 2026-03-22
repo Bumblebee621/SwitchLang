@@ -277,6 +277,8 @@ class HookManager:
         if mode in ('standard', 'smart', 'technical'):
             self.model_mode = mode
             logger.info('Model mode set to: %s', mode)
+        else:
+            logger.warning('Invalid model mode ignored: %r', mode)
 
     @property
     def is_suspended(self):

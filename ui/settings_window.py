@@ -9,7 +9,8 @@ from PyQt6.QtWidgets import (
     QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QCheckBox, QSlider, QPushButton, QLineEdit,
     QListWidget, QGroupBox, QFrame, QSizePolicy, QMessageBox,
-    QScrollArea, QSpinBox, QProgressBar, QDialog
+    QScrollArea, QSpinBox, QProgressBar, QDialog, QRadioButton,
+    QButtonGroup
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread
 from PyQt6.QtGui import QFont, QIcon, QKeyEvent
@@ -173,8 +174,12 @@ class SettingsWindow(QMainWindow):
         sep.setStyleSheet('background-color: #45475a; max-height: 1px;')
         layout.addWidget(sep)
 
+        self._fg_timer = QTimer(self)
+        self._fg_timer.setInterval(1000)
+
         tabs = QTabWidget()
         tabs.addTab(self._build_general_tab(), 'General')
+        tabs.addTab(self._build_language_model_tab(), 'Language Model')
         tabs.addTab(self._build_blacklist_tab(), 'Blacklist')
         tabs.addTab(self._build_about_tab(), 'About')
         layout.addWidget(tabs)
@@ -297,34 +302,6 @@ class SettingsWindow(QMainWindow):
 
         layout.addWidget(suspend_group)
 
-        # Language Model Group
-        model_group = QGroupBox('Language Model')
-        mg_layout = QVBoxLayout(model_group)
-
-        model_desc = QLabel(
-            'Standard: General conversational context.\n'
-            'Smart: Technical mode in IDEs & Editors, Standard elsewhere.\n'
-            'Always Technical: Enhanced for programming terms everywhere.'
-        )
-        model_desc.setWordWrap(True)
-        model_desc.setStyleSheet('color: #6c7086; font-size: 11px;')
-        mg_layout.addWidget(model_desc)
-
-        self.model_std_radio = QCheckBox('Standard (Conversational)')
-        self.model_smart_radio = QCheckBox('Smart (IDEs & Editors)')
-        self.model_tech_radio = QCheckBox('Always Technical')
-        
-        # Make them behave like radio buttons
-        self.model_std_radio.toggled.connect(self._on_model_std_toggled)
-        self.model_smart_radio.toggled.connect(self._on_model_smart_toggled)
-        self.model_tech_radio.toggled.connect(self._on_model_tech_toggled)
-        
-        mg_layout.addWidget(self.model_std_radio)
-        mg_layout.addWidget(self.model_smart_radio)
-        mg_layout.addWidget(self.model_tech_radio)
-
-        layout.addWidget(model_group)
-
         # Debug Mode Group
         debug_group = QGroupBox('Advanced')
         dg_layout = QVBoxLayout(debug_group)
@@ -391,19 +368,114 @@ class SettingsWindow(QMainWindow):
 
         action_row.addStretch()
 
-        self.capture_btn = QPushButton('⊕ Blacklist: ...')
+        self.capture_btn = QPushButton('Blacklist latest foreground App: ...')
         self.capture_btn.setToolTip(
             'Add the currently focused application to the blacklist'
         )
         self.capture_btn.clicked.connect(self._capture_foreground)
         action_row.addWidget(self.capture_btn)
 
-        self._fg_timer = QTimer(self)
-        self._fg_timer.setInterval(1000)
         self._fg_timer.timeout.connect(self._update_capture_btn)
 
         layout.addLayout(action_row)
         return tab
+
+    def _build_language_model_tab(self):
+        """Build the Language Model and Technical Apps tab."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet('background: transparent;')
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(16)
+
+        # Language Model Group
+        model_group = QGroupBox('Model Selection')
+        mg_layout = QVBoxLayout(model_group)
+
+        model_desc = QLabel(
+            'Standard: General conversational context.\n'
+            'Smart: Technical mode in IDEs && Custom Apps, Standard elsewhere.\n'
+            'Always Technical: Enhanced for programming terms everywhere.'
+        )
+        model_desc.setWordWrap(True)
+        model_desc.setStyleSheet('color: #6c7086; font-size: 11px;')
+        mg_layout.addWidget(model_desc)
+
+        self.model_std_radio = QCheckBox('Standard (Conversational)')
+        self.model_smart_radio = QCheckBox('Smart (IDEs && Custom Apps)')
+        self.model_tech_radio = QCheckBox('Always Technical')
+        
+        self.model_btn_group = QButtonGroup(self)
+        self.model_btn_group.setExclusive(True)
+        self.model_btn_group.addButton(self.model_std_radio)
+        self.model_btn_group.addButton(self.model_smart_radio)
+        self.model_btn_group.addButton(self.model_tech_radio)
+        
+        self.model_std_radio.toggled.connect(lambda checked: checked and self._apply_settings())
+        self.model_smart_radio.toggled.connect(lambda checked: checked and self._apply_settings())
+        self.model_tech_radio.toggled.connect(lambda checked: checked and self._apply_settings())
+        
+        mg_layout.addWidget(self.model_std_radio)
+        mg_layout.addWidget(self.model_smart_radio)
+        mg_layout.addWidget(self.model_tech_radio)
+
+        layout.addWidget(model_group)
+
+        # Custom Technical Apps Group
+        apps_group = QGroupBox('Custom Technical Apps')
+        ag_layout = QVBoxLayout(apps_group)
+
+        apps_desc = QLabel(
+            'When using "Smart" mode, these applications will trigger the '
+            'Technical model instead of Standard. Built-in IDEs are already included and will not be shown here.'
+        )
+        apps_desc.setWordWrap(True)
+        apps_desc.setStyleSheet('color: #6c7086; font-size: 11px;')
+        ag_layout.addWidget(apps_desc)
+
+        self.tech_apps_widget = QListWidget()
+        ag_layout.addWidget(self.tech_apps_widget)
+
+        add_row = QHBoxLayout()
+        self.tech_exe_input = QLineEdit()
+        self.tech_exe_input.setPlaceholderText('e.g. terminal.exe')
+        self.tech_exe_input.returnPressed.connect(self._add_tech_exe)
+        add_row.addWidget(self.tech_exe_input)
+
+        add_btn = QPushButton('Add')
+        add_btn.setObjectName('primary_button')
+        add_btn.setFixedWidth(60)
+        add_btn.clicked.connect(self._add_tech_exe)
+        add_row.addWidget(add_btn)
+        ag_layout.addLayout(add_row)
+
+        action_row = QHBoxLayout()
+
+        remove_btn = QPushButton('Remove Selected')
+        remove_btn.setObjectName('danger_button')
+        remove_btn.clicked.connect(self._remove_tech_exe)
+        action_row.addWidget(remove_btn)
+
+        action_row.addStretch()
+
+        self.tech_capture_btn = QPushButton('Add latest foreground App: ...')
+        self.tech_capture_btn.setToolTip('Add the currently focused application as a custom technical app')
+        self.tech_capture_btn.clicked.connect(self._capture_tech_foreground)
+        action_row.addWidget(self.tech_capture_btn)
+
+        ag_layout.addLayout(action_row)
+        layout.addWidget(apps_group)
+
+        layout.addStretch()
+        scroll.setWidget(container)
+
+        self._fg_timer.timeout.connect(self._update_tech_capture_btn)
+
+        return scroll
 
     def _build_about_tab(self):
         """Build the About/Update tab."""
@@ -543,17 +615,12 @@ class SettingsWindow(QMainWindow):
 
         # Model Mode
         mode = data.get('model_mode', 'standard')
-        self.model_std_radio.blockSignals(True)
-        self.model_smart_radio.blockSignals(True)
-        self.model_tech_radio.blockSignals(True)
-        
-        self.model_std_radio.setChecked(mode == 'standard')
-        self.model_smart_radio.setChecked(mode == 'smart')
-        self.model_tech_radio.setChecked(mode == 'technical')
-        
-        self.model_std_radio.blockSignals(False)
-        self.model_smart_radio.blockSignals(False)
-        self.model_tech_radio.blockSignals(False)
+        if mode == 'technical':
+            self.model_tech_radio.setChecked(True)
+        elif mode == 'smart':
+            self.model_smart_radio.setChecked(True)
+        else:
+            self.model_std_radio.setChecked(True)
 
         # Suspension
         self._suspend_vks = data.get('suspend_keybind_vks', [])
@@ -563,6 +630,11 @@ class SettingsWindow(QMainWindow):
         self.blacklist_widget.clear()
         for exe in self.blacklist_manager.get_list():
             self.blacklist_widget.addItem(exe)
+            
+        if hasattr(self, 'tech_apps_widget'):
+            self.tech_apps_widget.clear()
+            for exe in self.blacklist_manager.get_tech_apps_list():
+                self.tech_apps_widget.addItem(exe)
 
     def _toggle_startup(self, checked):
         """Toggle the application's launch on startup setting."""
@@ -625,51 +697,6 @@ class SettingsWindow(QMainWindow):
             
         self._apply_settings()
 
-    def _on_model_std_toggled(self, checked):
-        """Simulate radio button behavior for model selection."""
-        if checked:
-            self.model_smart_radio.blockSignals(True)
-            self.model_smart_radio.setChecked(False)
-            self.model_smart_radio.blockSignals(False)
-            self.model_tech_radio.blockSignals(True)
-            self.model_tech_radio.setChecked(False)
-            self.model_tech_radio.blockSignals(False)
-            self._apply_settings()
-        elif not self.model_tech_radio.isChecked() and not self.model_smart_radio.isChecked():
-            # Don't allow unchecking all
-            self.model_std_radio.blockSignals(True)
-            self.model_std_radio.setChecked(True)
-            self.model_std_radio.blockSignals(False)
-
-    def _on_model_smart_toggled(self, checked):
-        """Simulate radio button behavior for model selection."""
-        if checked:
-            self.model_std_radio.blockSignals(True)
-            self.model_std_radio.setChecked(False)
-            self.model_std_radio.blockSignals(False)
-            self.model_tech_radio.blockSignals(True)
-            self.model_tech_radio.setChecked(False)
-            self.model_tech_radio.blockSignals(False)
-            self._apply_settings()
-        elif not self.model_std_radio.isChecked() and not self.model_tech_radio.isChecked():
-            self.model_smart_radio.blockSignals(True)
-            self.model_smart_radio.setChecked(True)
-            self.model_smart_radio.blockSignals(False)
-
-    def _on_model_tech_toggled(self, checked):
-        """Simulate radio button behavior for model selection."""
-        if checked:
-            self.model_std_radio.blockSignals(True)
-            self.model_std_radio.setChecked(False)
-            self.model_std_radio.blockSignals(False)
-            self.model_smart_radio.blockSignals(True)
-            self.model_smart_radio.setChecked(False)
-            self.model_smart_radio.blockSignals(False)
-            self._apply_settings()
-        elif not self.model_std_radio.isChecked() and not self.model_smart_radio.isChecked():
-            self.model_tech_radio.blockSignals(True)
-            self.model_tech_radio.setChecked(True)
-            self.model_tech_radio.blockSignals(False)
 
     def _start_keybind_recording(self):
         """Enter the recording state to capture a new hotkey."""
@@ -727,6 +754,49 @@ class SettingsWindow(QMainWindow):
         self._apply_settings()
         self.close()
 
+    def _add_tech_exe(self):
+        """Add a typed exe name to the tech apps list."""
+        exe = self.tech_exe_input.text().strip()
+        if exe:
+            if not exe.lower().endswith('.exe'):
+                exe += '.exe'
+            self.blacklist_manager.add_tech_app(exe)
+            self._refresh_tech_apps()
+            self.tech_exe_input.clear()
+
+    def _remove_tech_exe(self):
+        """Remove the selected exe from the tech apps list."""
+        item = self.tech_apps_widget.currentItem()
+        if item:
+            self.blacklist_manager.remove_tech_app(item.text())
+            self._refresh_tech_apps()
+
+    def _update_tech_capture_btn(self):
+        """Update the capture button with the current foreground app for tech apps."""
+        exe = self.blacklist_manager.get_foreground_exe()
+        skip = {'python.exe', 'pythonw.exe', 'switchlang.exe'}
+        if exe and exe not in skip:
+            self._last_tech_exe = exe
+        if hasattr(self, '_last_tech_exe') and self._last_tech_exe:
+            self.tech_capture_btn.setText(
+                f'Add latest foreground App: {self._last_tech_exe}'
+            )
+        else:
+            self.tech_capture_btn.setText('Add latest foreground App')
+
+    def _capture_tech_foreground(self):
+        """Add the last non-SwitchLang foreground app to tech apps."""
+        exe = getattr(self, '_last_tech_exe', None)
+        if exe:
+            self.blacklist_manager.add_tech_app(exe)
+            self._refresh_tech_apps()
+
+    def _refresh_tech_apps(self):
+        """Reload the tech apps widget from the manager."""
+        self.tech_apps_widget.clear()
+        for exe in self.blacklist_manager.get_tech_apps_list():
+            self.tech_apps_widget.addItem(exe)
+
     def _add_exe(self):
         """Add a typed exe name to the blacklist."""
         exe = self.exe_input.text().strip()
@@ -752,10 +822,10 @@ class SettingsWindow(QMainWindow):
             self._last_external_exe = exe
         if hasattr(self, '_last_external_exe') and self._last_external_exe:
             self.capture_btn.setText(
-                f'⊕ Blacklist: {self._last_external_exe}'
+                f'Blacklist latest foreground App: {self._last_external_exe}'
             )
         else:
-            self.capture_btn.setText('⊕ Blacklist Current App')
+            self.capture_btn.setText('Blacklist latest foreground App')
 
     def _capture_foreground(self):
         """Blacklist the last non-SwitchLang foreground app."""

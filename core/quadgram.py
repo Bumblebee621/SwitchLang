@@ -8,6 +8,9 @@ by computing log-probability under the model.
 import json
 import math
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class QuadgramModel:
@@ -146,5 +149,7 @@ def load_models(data_dir, load_so=False):
         so_path = os.path.join(data_dir, 'so_quadgrams.json')
         if os.path.exists(so_path):
             models['so'] = QuadgramModel(so_path)
+        else:
+            logger.warning('so_quadgrams.json not found — technical mode will fall back to standard')
             
     return models

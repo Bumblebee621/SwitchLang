@@ -1,3 +1,4 @@
+import os
 import requests
 import re
 import lxml.html
@@ -77,7 +78,7 @@ def build_clean_corpus_robust(url, output_txt_path, sample_rate=100, target_size
                                             reason = "target size" if current_size >= target_size_bytes else "max lines"
                                             print(f"\nReached {reason} ({current_size / (1024*1024):.2f} MB, {current_lines} lines).")
                                             return
-                                except:
+                                except Exception:
                                     pass
                                 
                         pbar.update(1)

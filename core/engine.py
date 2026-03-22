@@ -33,7 +33,7 @@ class EvaluationEngine:
             storage_dir: Base directory for stats and logs.
             enable_logging: Whether to log decisions to a CSV file.
             en_so_model: Optional QuadgramModel for Stack Overflow English.
-            model_mode: 'standard' or 'technical'.
+            model_mode: 'standard', 'smart', or 'technical'.
         """
         self.en_model = en_model
         self.he_model = he_model
@@ -62,10 +62,12 @@ class EvaluationEngine:
             self._ensure_stats_file()
 
     def set_model_mode(self, mode):
-        """Switch between standard and technical model modes."""
-        if mode in ('standard', 'technical'):
+        """Switch between standard, smart, and technical model modes."""
+        if mode in ('standard', 'smart', 'technical'):
             self.model_mode = mode
             logger.info(f"Model mode switched to: {mode}")
+        else:
+            logger.warning(f"Invalid model mode ignored: {mode!r}")
 
     def set_enable_logging(self, enabled):
         """Toggle CSV decision logging at runtime."""

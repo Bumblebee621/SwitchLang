@@ -6,11 +6,11 @@ tray.py — System tray icon and context menu.
 import webbrowser
 from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QApplication
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QAction
-from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, pyqtSlot
 import os
 
 
-def _create_tray_icon_pixmap():
+def _create_tray_icon_pixmap(suspended=False):
     """Create a programmatic 'SL' icon for the system tray."""
     size = 64
     pixmap = QPixmap(QSize(size, size))
@@ -19,11 +19,15 @@ def _create_tray_icon_pixmap():
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-    painter.setBrush(QColor('#89b4fa'))
+    # Use muted colors for suspended state
+    bg_color = QColor('#45475a') if suspended else QColor('#89b4fa')
+    text_color = QColor('#bac2de') if suspended else QColor('#1e1e2e')
+
+    painter.setBrush(bg_color)
     painter.setPen(Qt.PenStyle.NoPen)
     painter.drawRoundedRect(0, 0, size, size, 14, 14)
 
-    painter.setPen(QColor('#1e1e2e'))
+    painter.setPen(text_color)
     font = QFont('Segoe UI', 24, QFont.Weight.Bold)
     painter.setFont(font)
     painter.drawText(
@@ -32,14 +36,25 @@ def _create_tray_icon_pixmap():
         'SL'
     )
 
+    if suspended:
+        # Draw a small pause indicator
+        painter.setBrush(QColor('#f38ba8'))
+        margin = 10
+        w = 6
+        h = 16
+        painter.drawRect(size - margin - w*2 - 2, size - margin - h, w, h)
+        painter.drawRect(size - margin - w, size - margin - h, w, h)
+
     painter.end()
     return pixmap
 
 
 class SystemTrayApp(QSystemTrayIcon):
     """System tray icon with context menu."""
+    suspension_signal = pyqtSignal(bool)
 
     def __init__(self, settings_window, hook_manager, icon_path=None, parent=None):
+        self._icon_path = icon_path
         if icon_path and os.path.exists(icon_path):
             icon = QIcon(icon_path)
         else:
@@ -49,6 +64,11 @@ class SystemTrayApp(QSystemTrayIcon):
 
         self.settings_window = settings_window
         self.hook_manager = hook_manager
+
+        # Thread-safe OSD notification
+        from ui.osd import SuspensionOSD
+        self.osd = SuspensionOSD()
+        self.suspension_signal.connect(self._handle_suspension)
 
         self.setToolTip('SwitchLang — Keyboard layout auto-switcher')
 
@@ -120,23 +140,31 @@ class SystemTrayApp(QSystemTrayIcon):
             )
 
     def notify_suspension(self, suspended):
-        """Show a tray notification when engine suspension state changes."""
+        """Bridge method called from HookManager (background thread)."""
+        self.suspension_signal.emit(suspended)
+
+    @pyqtSlot(bool)
+    def _handle_suspension(self, suspended):
+        """Actual UI update logic running on the main thread."""
+        # Update Tray Icon
+        if self._icon_path and os.path.exists(self._icon_path):
+            pass
+        else:
+            self.setIcon(QIcon(_create_tray_icon_pixmap(suspended=suspended)))
+
         if suspended:
-            # Note: access private duration for display
             dur = self.hook_manager._suspend_duration
-            self.showMessage(
+            self.osd.show_status(
                 'SwitchLang Suspended',
                 f'Auto-switching paused for {dur} seconds.\n'
                 'Press hotkey again to resume.',
-                QSystemTrayIcon.MessageIcon.Warning,
-                3000
+                duration_ms=3000
             )
         else:
-            self.showMessage(
+            self.osd.show_status(
                 'SwitchLang Resumed',
                 'Auto-switching has resumed.',
-                QSystemTrayIcon.MessageIcon.Information,
-                2000
+                duration_ms=1500
             )
 
     def _quit(self):
