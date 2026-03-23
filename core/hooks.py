@@ -79,7 +79,7 @@ DELIMITER_CHARS = {VK_SPACE: ' ', VK_RETURN: '\n'}
 
 # Stores a completed word and its metadata for retroactive correction (Lookback)
 _WordEntry = collections.namedtuple(
-    '_WordEntry', ['active', 'shadow', 'delimiter', 'is_ambiguous']
+    '_WordEntry', ['active', 'shadow', 'delimiter', 'is_colliding', 'is_ambiguous']
 )
 
 
@@ -337,24 +337,26 @@ class HookManager:
         self.history_deque.clear()
 
     def _build_correction_block(self):
-        """Collect contiguous ambiguous words from the recent history.
+        """Collect contiguous correctable words from the recent history.
         
-        This enables "delayed detection": if the engine realizes after 3 words
-        that you've been in the wrong layout, it can fix all 3 words at once.
+        A word is correctable if it is either a collision (is_colliding) or
+        ambiguous (is_ambiguous). This enables "delayed detection": if the
+        engine realizes after 3 words that you've been in the wrong layout,
+        it can fix all 3 words at once.
 
         Returns:
             List of _WordEntry items in chronological order.
         """
         block = []
         for entry in reversed(self.history_deque):
-            if entry.is_ambiguous:
+            if entry.is_colliding or entry.is_ambiguous:
                 block.append(entry)
             else:
                 break
         block.reverse()
         if block:
             logger.debug(
-                'Correction block: %d ambiguous words: %s',
+                'Correction block: %d correctable words: %s',
                 len(block), [e.active for e in block]
             )
         return block
@@ -440,7 +442,7 @@ class HookManager:
                 if eff_mode == 'smart':
                     eff_mode = 'technical' if self._cached_is_ide_editor else 'standard'
 
-                should_switch, diff, is_ambiguous = self.engine.evaluate(
+                should_switch, diff, is_colliding, is_ambiguous = self.engine.evaluate(
                     self.buffer_active,
                     self.buffer_shadow,
                     self.sensitivity.delta,
@@ -450,9 +452,9 @@ class HookManager:
                 )
                 
                 logger.debug(
-                    'EVAL: "%s" (%s) -> "%s" | diff=%+.2f vs delta=%.2f | switch=%s | ambiguous=%s',
+                    'EVAL: "%s" (%s) -> "%s" | diff=%+.2f vs delta=%.2f | switch=%s | colliding=%s | ambiguous=%s',
                     self.buffer_active, current, self.buffer_shadow, diff,
-                    self.sensitivity.delta, should_switch, is_ambiguous
+                    self.sensitivity.delta, should_switch, is_colliding, is_ambiguous
                 )
 
                 # Special Case: Hebrew + Caps Lock = Incorrect English.
@@ -468,6 +470,7 @@ class HookManager:
                     active=self.buffer_active,
                     shadow=self.buffer_shadow,
                     delimiter=delimiter_char,
+                    is_colliding=is_colliding,
                     is_ambiguous=is_ambiguous,
                 ))
 
@@ -499,7 +502,7 @@ class HookManager:
             if eff_mode == 'smart':
                 eff_mode = 'technical' if self._cached_is_ide_editor else 'standard'
 
-            should_switch, diff, is_ambiguous = self.engine.evaluate(
+            should_switch, diff, is_colliding, is_ambiguous = self.engine.evaluate(
                 self.buffer_active,
                 self.buffer_shadow,
                 self.sensitivity.delta,
@@ -507,9 +510,9 @@ class HookManager:
                 mode=eff_mode
             )
             logger.debug(
-                    'EVAL: "%s" (%s) -> "%s" | diff=%+.2f vs delta=%.2f | switch=%s | ambiguous=%s',
+                    'EVAL: "%s" (%s) -> "%s" | diff=%+.2f vs delta=%.2f | switch=%s | colliding=%s | ambiguous=%s',
                     self.buffer_active, current, self.buffer_shadow, diff,
-                    self.sensitivity.delta, should_switch, is_ambiguous
+                    self.sensitivity.delta, should_switch, is_colliding, is_ambiguous
                 )
             
             caps_lock = _is_caps_lock_on()
@@ -573,7 +576,7 @@ class HookManager:
             # Swap buffers so switcher erases the "bad" English and injects "intended" Hebrew.
             buf_active, buf_shadow = buf_shadow, buf_active
             correction_block = [
-                _WordEntry(active=e.shadow, shadow=e.active, delimiter=e.delimiter, is_ambiguous=e.is_ambiguous)
+                _WordEntry(active=e.shadow, shadow=e.active, delimiter=e.delimiter, is_colliding=e.is_colliding, is_ambiguous=e.is_ambiguous)
                 for e in correction_block
             ]
 

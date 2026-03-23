@@ -44,6 +44,7 @@ data/*.json
 !data/icon.ico
 !data/icon.png
 Bugs.md
+Bugs 2.0.md
 Output/
 
 # IDEs
