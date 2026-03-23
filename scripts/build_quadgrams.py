@@ -38,6 +38,12 @@ def _process_chunk(lines, allowed_chars=None):
             if allowed_chars is not None:
                 if any(ch not in allowed_chars for ch in word):
                     continue
+                
+                # Nikud (vocalization) filter for Hebrew:
+                # Discard entire words containing Hebrew nikud/vocalization marks 
+                # (Unicode range \u0591 to \u05C7).
+                if any('\u0591' <= ch <= '\u05C7' for ch in word):
+                    continue
 
             if len(word) > 12:
                 continue
