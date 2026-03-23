@@ -51,15 +51,24 @@ class LineRotatingFileHandler(logging.Handler):
         except Exception:
             self.handleError(record)
 
-# Configure logging — console-only by default (WARNING level).
-# Debug mode (toggled by the user) adds a file handler and switches to DEBUG.
-_LOG_FORMAT = '%(asctime)s [%(name)s] %(levelname)s: %(message)s'
+# Custom formatter that trims the logger name to only its last segment
+# (e.g. 'switchlang.hooks' -> 'hooks', 'core.engine' -> 'engine')
+class _ShortNameFormatter(logging.Formatter):
+    def format(self, record):
+        record.shortname = record.name.rsplit('.', 1)[-1]
+        return super().format(record)
+
+_LOG_FORMAT = '%(asctime)s [%(shortname)s] %(levelname)s: %(message)s'
+_LOG_DATE_FORMAT = '%m-%d %H:%M:%S'
 _log_file_handler = None   # Lazy-created when debug mode is enabled
+
+_console_formatter = _ShortNameFormatter(_LOG_FORMAT, datefmt=_LOG_DATE_FORMAT)
+_console_handler = logging.StreamHandler(sys.stdout)
+_console_handler.setFormatter(_console_formatter)
 
 logging.basicConfig(
     level=logging.WARNING,
-    format=_LOG_FORMAT,
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[_console_handler]
 )
 logger = logging.getLogger('switchlang')
 
@@ -82,7 +91,7 @@ def set_debug_mode(enabled):
                 os.path.join(STORAGE_DIR, 'switchlang.log'),
                 max_lines=1000, encoding='utf-8'
             )
-            _log_file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+            _log_file_handler.setFormatter(_ShortNameFormatter(_LOG_FORMAT, datefmt=_LOG_DATE_FORMAT))
         if _log_file_handler not in root.handlers:
             root.addHandler(_log_file_handler)
         root.setLevel(logging.DEBUG)
