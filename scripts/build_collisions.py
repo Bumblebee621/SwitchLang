@@ -1,9 +1,9 @@
 """
 build_collisions.py — Generate data/collisions.json
 
-Fetches curated word lists from the internet:
-  - English: Google's top 10,000 common English words (with swears)
-  - Hebrew:  hspell spell-checker dictionary
+Fetches curated word lists:
+  - English: Top 10,000 common English words via the `wordfreq` package
+  - Hebrew:  hspell spell-checker dictionary (fetched from the internet)
 
 A collision pair is a Hebrew word whose physical key shadow (interpreted
 on an English QWERTY layout) is a valid English word, and vice versa.
@@ -12,19 +12,17 @@ Both sides are written into collisions.json as a flat sorted list.
 JSON file will contain only lower case words.
 
 Run from the project root:
-    python scripts/build_collisions.py
+    uv run python scripts/build_collisions.py
 """
 
 import json
 import os
 import urllib.request
 
+import wordfreq
+
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
 
-ENG_URL = (
-    "https://raw.githubusercontent.com/first20hours/google-10000-english"
-    "/master/google-10000-english.txt"
-)
 HEB_URL = (
     "https://raw.githubusercontent.com/eyaler/hebrew_wordlists"
     "/main/hspell_simple.txt"
@@ -51,10 +49,10 @@ def fetch_lines(url):
         return [line.decode('utf-8').strip() for line in resp]
 
 
-def load_english_words(url):
+def load_english_words():
     """Top-10k English words, alpha-only, length 2-6."""
     words = set()
-    for word in fetch_lines(url):
+    for word in wordfreq.top_n_list('en', 10000):
         w = word.lower()
         if 2 <= len(w) <= 6 and w.isalpha():
             words.add(w)
@@ -90,7 +88,7 @@ def shadow_he_to_en(word):
 
 def build_collisions():
     print('Loading word lists...')
-    en_words = load_english_words(ENG_URL)
+    en_words = load_english_words()
     he_words = load_hebrew_words(HEB_URL)
 
     print('\nFinding collision pairs...')
