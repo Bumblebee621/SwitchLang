@@ -27,6 +27,7 @@ CORPUS_PATH = os.path.join(PROJECT_DIR, "data", "he_corpus.txt")
 OUTPUT_PATH = os.path.join(PROJECT_DIR, "data", "he_corpus_spacefix_sample.txt")
 DIFF_PATH   = os.path.join(PROJECT_DIR, "data", "he_corpus_spacefix_diff.txt")
 
+BATCH_SIZE = 32
 NUM_LINES = 1000
 MODEL_NAME = "dicta-il/dictabert-char-spacefix"
 
@@ -37,13 +38,35 @@ def main():
     # --- 1. Load the model ------------------------------------------------
     print(f"Loading model: {MODEL_NAME} ...")
     try:
+        import torch
         from transformers import pipeline
     except ImportError:
-        print("ERROR: 'transformers' package not found.")
+        print("ERROR: 'transformers' or 'torch' package not found.")
         print("Install with:  pip install transformers torch")
         sys.exit(1)
 
-    oracle = pipeline("token-classification", model=MODEL_NAME)
+    # Device selection: CUDA -> DirectML (AMD/Intel) -> CPU
+    device = None
+    if torch.cuda.is_available():
+        device = 0
+        print("Using NVIDIA GPU (CUDA).")
+    else:
+        try:
+            import torch_directml
+            device = torch_directml.device()
+            print(f"Using AMD/Intel GPU via DirectML ({device}).")
+        except ImportError:
+            device = -1
+            print("Using CPU (No NVIDIA/AMD GPU device found).")
+            print("TIP: For AMD GPUs on Windows, install 'torch-directml'.")
+
+    # Optimized for batching
+    oracle = pipeline(
+        "token-classification", 
+        model=MODEL_NAME, 
+        device=device,
+        batch_size=BATCH_SIZE
+    )
     print("Model loaded.\n")
 
     # --- 2. Read corpus lines ---------------------------------------------
@@ -61,24 +84,28 @@ def main():
 
     print(f"Read {len(lines)} lines.\n")
 
-    # --- 3. Process each line ---------------------------------------------
+    # --- 3. Process lines in batches --------------------------------------
+    print(f"Processing in batches of {BATCH_SIZE}...")
     fixed_lines = []
     changed_count = 0
     total_spaces_added = 0
     diff_entries = []
 
     t0 = time.time()
-    for idx, original in enumerate(lines):
-        # Skip empty / whitespace-only lines
-        if not original.strip():
-            fixed_lines.append(original)
-            continue
+    
+    # Pass the entire list to the oracle; pipeline handles the batching internally
+    # We strip empty lines to avoid model errors or useless processing
+    valid_lines = [l if l.strip() else "" for l in lines]
+    
+    try:
+        # Use a generator/iterator for potentially huge corpora in the future
+        results = oracle(valid_lines)
+    except Exception as e:
+        print(f"ERROR during model inference: {e}")
+        sys.exit(1)
 
-        # Run the model
-        try:
-            raw_output = oracle(original)
-        except Exception as e:
-            print(f"  WARNING: model error on line {idx+1}: {e}")
+    for idx, (original, raw_output) in enumerate(zip(lines, results)):
+        if not original.strip():
             fixed_lines.append(original)
             continue
 
@@ -100,10 +127,10 @@ def main():
                 f"  FIXED: {fixed}\n"
             )
 
-        # Progress
+        # Progress manually tracked as batching is internal
         if (idx + 1) % 100 == 0:
             elapsed = time.time() - t0
-            print(f"  Processed {idx+1}/{len(lines)} lines  ({elapsed:.1f}s)")
+            print(f"  Finalized {idx+1}/{len(lines)} lines  ({elapsed:.1f}s)")
 
     elapsed = time.time() - t0
 
@@ -119,6 +146,7 @@ def main():
         f.write(f"Lines processed: {len(lines)}\n")
         f.write(f"Lines changed:   {changed_count}\n")
         f.write(f"Total spaces added: {total_spaces_added}\n")
+        f.write(f"Batch Size:      {BATCH_SIZE}\n")
         f.write(f"{'='*60}\n\n")
         for entry in diff_entries:
             f.write(entry + "\n")
@@ -126,13 +154,15 @@ def main():
 
     # --- 5. Summary -------------------------------------------------------
     print(f"\n{'='*60}")
-    print(f"  SUMMARY")
+    print(f"  SUMMARY (BATCHED)")
     print(f"{'='*60}")
     print(f"  Lines processed:    {len(lines)}")
     print(f"  Lines changed:      {changed_count}  ({100*changed_count/len(lines):.1f}%)")
     print(f"  Total spaces added: {total_spaces_added}")
     print(f"  Time elapsed:       {elapsed:.1f}s")
+    print(f"  Average per line:   {(elapsed/len(lines))*1000:.1f}ms")
     print(f"{'='*60}")
+
 
 
 if __name__ == "__main__":
