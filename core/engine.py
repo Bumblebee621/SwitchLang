@@ -191,7 +191,7 @@ class EvaluationEngine:
             score_diff = score_shadow - score_active.
         """
         if len(s_active) < 2:
-            return False, 0.0, False
+            return False, 0.0, True
 
         is_ambig = self.check_collision(s_active, s_shadow)
         
