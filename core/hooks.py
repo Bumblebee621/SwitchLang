@@ -418,6 +418,14 @@ class HookManager:
             if self.buffer_active:
                 self.buffer_active = self.buffer_active[:-1]
                 self.buffer_shadow = self.buffer_shadow[:-1]
+            elif self.history_deque:
+                # Cross-boundary backspace: the user is deleting the delimiter
+                # that separated the current (empty) word from the previous one.
+                # Pop the previous word from history and restore it into the
+                # buffers so lookback stays in sync with what's on screen.
+                prev = self.history_deque.pop()
+                self.buffer_active = prev.active
+                self.buffer_shadow = prev.shadow
             return False
 
         # 4. Handle Delimiters (Space, Enter, Tab) — TRIGGER TIER 1 EVALUATION
