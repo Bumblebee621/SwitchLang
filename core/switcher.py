@@ -293,7 +293,7 @@ def execute_switch(buffer_active, buffer_shadow,
         set_correcting: Callable(bool) to set/clear the lock flag.
         target_layout: 'en' or 'he' — the layout to switch TO.
         correction_block: Optional list of _WordEntry namedtuples for
-                          retroactively corrected ambiguous words that
+                          retroactively corrected colliding/ambiguous words that
                           preceded the trigger word.
         trigger_delimiter: The delimiter char (e.g. ' ') that was passed
                            through to the app before the switch thread ran,

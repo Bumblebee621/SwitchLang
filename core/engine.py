@@ -84,7 +84,7 @@ class EvaluationEngine:
                     writer = csv.writer(f)
                     writer.writerow([
                         'time', 'active_word', 'shadow_word', 'layout', 
-                        'on_delimiter', 'is_ambiguous', 'score_diff', 'delta', 'category', 'should_switch'
+                        'on_delimiter', 'is_colliding', 'is_ambiguous', 'score_diff', 'delta', 'category', 'should_switch'
                     ])
             except OSError as e:
                 logger.warning(f"Could not create stats file: {e}")
@@ -111,7 +111,7 @@ class EvaluationEngine:
         except OSError as e:
             logger.warning(f"Could not rotate decision_stats.csv: {e}")
 
-    def _log_decision(self, s_active, s_shadow, layout, on_delimiter, is_ambiguous, score_diff, delta, should_switch):
+    def _log_decision(self, s_active, s_shadow, layout, on_delimiter, is_colliding, is_ambiguous, score_diff, delta, should_switch):
         """Log the evaluation decision to the CSV file."""
         if not self.enable_logging:
             return
@@ -133,6 +133,7 @@ class EvaluationEngine:
                 s_shadow,
                 layout,
                 on_delimiter,
+                is_colliding,
                 is_ambiguous,
                 f"{score_diff:.3f}",
                 f"{delta:.2f}",
@@ -187,13 +188,16 @@ class EvaluationEngine:
             mode: Optional mode override ('standard' or 'technical').
 
         Returns:
-            Tuple (should_switch: bool, score_diff: float, is_ambiguous: bool).
+            Tuple (should_switch: bool, score_diff: float, is_colliding: bool, is_ambiguous: bool).
             score_diff = score_shadow - score_active.
+            is_colliding = True if the word is a known shadow collision.
+            is_ambiguous = True if the score leans toward switching but didn't cross delta.
         """
         if len(s_active) < 2:
-            return False, 0.0, True
+            return False, 0.0, False, True
 
-        is_ambig = self.check_collision(s_active, s_shadow)
+        is_colliding = self.check_collision(s_active, s_shadow)
+        is_ambiguous = False
         
         # Prepend a space because buffer_active always represents a word start.
         eval_active = ' ' + s_active
@@ -216,16 +220,16 @@ class EvaluationEngine:
 
         score_diff = score_shadow - score_active
         
-        if is_ambig:
+        if is_colliding:
             should_switch = False
         else:
             should_switch = score_diff > delta
             # Mark as ambiguous if it leans towards the target language 
             # (score_diff > 0) but hasn't crossed the current dynamic delta threshold.
             if not should_switch and score_diff > 0:
-                is_ambig = True
+                is_ambiguous = True
 
-        self._log_decision(s_active, s_shadow, current_layout, on_delimiter, is_ambig, score_diff, delta, should_switch)
+        self._log_decision(s_active, s_shadow, current_layout, on_delimiter, is_colliding, is_ambiguous, score_diff, delta, should_switch)
 
-        return should_switch, score_diff, is_ambig
+        return should_switch, score_diff, is_colliding, is_ambiguous
 
