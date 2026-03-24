@@ -23,10 +23,10 @@ logger = logging.getLogger(__name__)
 MAX_LINES_PER_LANG = 10_000_000
 
 # Base URL to the OPUS OpenSubtitles raw mono text files
-OPUS_URL_TEMPLATE = "https://object.pouta.csc.fi/OPUS-OpenSubtitles/v2018/mono/{lang}.txt.gz"
+OPUS_URL_TEMPLATE = "https://object.pouta.csc.fi/OPUS-OpenSubtitles/v2024/mono/{lang}.txt.gz"
 
 def stream_corpus(lang: str, out_txt_path: str, max_lines: int) -> None:
-    """Stream a .txt.gz file from OPUS and write a specific number of lines to out_txt_path."""
+    """Stream a .txt.gz file from OPUS, deduplicate lines, and write to out_txt_path."""
     url = OPUS_URL_TEMPLATE.format(lang=lang)
     logger.info(f"Connecting to {url} ...")
     
@@ -34,6 +34,8 @@ def stream_corpus(lang: str, out_txt_path: str, max_lines: int) -> None:
     req = urllib.request.Request(url, headers=headers)
     
     lines_written = 0
+    lines_seen_total = 0
+    seen = set()
     start_time = time.time()
     
     try:
@@ -41,26 +43,52 @@ def stream_corpus(lang: str, out_txt_path: str, max_lines: int) -> None:
             with gzip.GzipFile(fileobj=response) as gz:
                 with open(out_txt_path, 'wb') as f_out:
                     for line in gz:
-                        # Optional: Add any filtering for extremely short or noisy subtitle lines here if needed.
-                        # For quadgrams, raw text is perfectly fine as is.
-                        f_out.write(line)
-                        lines_written += 1
+                        lines_seen_total += 1
+                        if line not in seen:
+                            seen.add(line)
+                            f_out.write(line)
+                            lines_written += 1
                         
-                        if lines_written % 100_000 == 0:
-                            print(f"\r[{lang.upper()}] Read {lines_written:,} lines...", end="")
+                        if lines_seen_total % 100_000 == 0:
+                            print(f"\r[{lang.upper()}] Scanned {lines_seen_total:,} / wrote {lines_written:,} unique ...", end="")
                             
                         if lines_written >= max_lines:
                             break
                             
         print()
         elapsed = time.time() - start_time
-        if lines_written < max_lines:
-            logger.warning(f"Corpus for '{lang}' ended early. Only {lines_written:,} lines available (requested {max_lines:,}).")
-        else:
-            logger.info(f"Successfully wrote {lines_written:,} lines for '{lang}' to {out_txt_path} in {elapsed:.1f}s.")
+        dupes = lines_seen_total - lines_written
+        logger.info(f"Wrote {lines_written:,} unique lines for '{lang}' (scanned {lines_seen_total:,}, removed {dupes:,} duplicates) in {elapsed:.1f}s.")
         
     except Exception as e:
         logger.error(f"Error downloading or processing '{lang}' corpus: {e}")
+
+
+def deduplicate_file(path: str) -> None:
+    """Deduplicate an existing corpus file in-place, preserving order."""
+    logger.info(f"Deduplicating '{path}' ...")
+    start_time = time.time()
+    
+    seen = set()
+    total = 0
+    unique = 0
+    tmp_path = path + '.dedup.tmp'
+    
+    with open(path, 'rb') as f_in, open(tmp_path, 'wb') as f_out:
+        for line in f_in:
+            total += 1
+            if line not in seen:
+                seen.add(line)
+                f_out.write(line)
+                unique += 1
+            if total % 500_000 == 0:
+                print(f"\r  Scanned {total:,} / kept {unique:,} ...", end="")
+    
+    print()
+    os.replace(tmp_path, path)
+    elapsed = time.time() - start_time
+    logger.info(f"Deduplication done: {total:,} -> {unique:,} lines (removed {total - unique:,}) in {elapsed:.1f}s.")
+
 
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -81,7 +109,8 @@ def main():
                 logger.info(f"Removing old/incomplete corpus '{txt_path}' ({current_size // 1_000_000} MB) to reach {MAX_LINES_PER_LANG:,} line target...")
                 os.remove(txt_path)
             else:
-                logger.info(f"Corpus for '{lang}' already exists ({current_size // 1_000_000} MB). Skipping.")
+                logger.info(f"Corpus for '{lang}' already exists ({current_size // 1_000_000} MB). Deduplicating in-place...")
+                deduplicate_file(txt_path)
                 continue
             
         logger.info(f"Downloading OpenSubtitles corpus for {lang.upper()}...")

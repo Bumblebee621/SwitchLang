@@ -191,7 +191,7 @@ class SettingsWindow(QMainWindow):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         # Ensure the scroll area doesn't have a background that clashes
-        scroll.setStyleSheet('background: transparent;')
+        scroll.setStyleSheet('QScrollArea, #general_tab_container { background: transparent; }')
 
         container = QWidget()
         container.setObjectName('general_tab_container')
@@ -385,9 +385,10 @@ class SettingsWindow(QMainWindow):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setStyleSheet('background: transparent;')
+        scroll.setStyleSheet('QScrollArea, #language_model_tab_container { background: transparent; }')
 
         container = QWidget()
+        container.setObjectName('language_model_tab_container')
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(16)
@@ -446,11 +447,11 @@ class SettingsWindow(QMainWindow):
         self.tech_exe_input.returnPressed.connect(self._add_tech_exe)
         add_row.addWidget(self.tech_exe_input)
 
-        add_btn = QPushButton('Add')
-        add_btn.setObjectName('primary_button')
-        add_btn.setFixedWidth(60)
-        add_btn.clicked.connect(self._add_tech_exe)
-        add_row.addWidget(add_btn)
+        self.tech_add_btn = QPushButton('Add')
+        self.tech_add_btn.setObjectName('primary_button')
+        self.tech_add_btn.setFixedWidth(60)
+        self.tech_add_btn.clicked.connect(self._add_tech_exe)
+        add_row.addWidget(self.tech_add_btn)
         ag_layout.addLayout(add_row)
 
         action_row = QHBoxLayout()

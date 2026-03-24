@@ -38,8 +38,9 @@ switchlang.log*
 data/*.txt
 data/*.gz
 data/*.json
-!data/en_trigrams.json
-!data/he_trigrams.json
+!data/en_quadgrams.json
+!data/he_quadgrams.json
+!data/so_quadgrams.json
 !data/collisions.json
 !data/icon.ico
 !data/icon.png
