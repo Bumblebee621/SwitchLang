@@ -11,6 +11,7 @@ import logging.handlers
 import os
 import sys
 import ctypes
+import signal
 from ctypes import wintypes
 from collections import deque
  
@@ -279,10 +280,28 @@ def main():
 
     hook_manager.start()
 
+    # Handle Ctrl+C gracefully
+    def handle_sigint(sig, frame):
+        logger.info("SIGINT received, shutting down...")
+        QApplication.quit()
+
+    signal.signal(signal.SIGINT, handle_sigint)
+
+    # A QTimer is needed to allow Python to process signals (like SIGINT) 
+    # because the Qt event loop normally blocks Python's signal handling.
+    from PyQt6.QtCore import QTimer
+    timer = QTimer()
+    timer.start(500)
+    timer.timeout.connect(lambda: None)  # Let the interpreter run
+
     print('SwitchLang is running in the system tray.')
     print('Right-click the tray icon for options.')
 
     exit_code = app.exec()
+
+    # Cleanup tray icon explicitly to avoid C++ runtime errors on shutdown
+    tray.hide()
+    tray.deleteLater()
 
     hook_manager.stop()
 

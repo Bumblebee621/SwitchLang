@@ -155,13 +155,6 @@ def main():
         json.dump(he_data, f, ensure_ascii=False, indent=2)
     logger.info(f"Hebrew model saved to: {he_path} (Vocab: {he_data['vocab_size']})")
 
-    # Reset placeholder collisions file
-    collision_path = os.path.join(data_dir, 'collisions.json')
-    if not os.path.exists(collision_path):
-        with open(collision_path, 'w', encoding='utf-8') as f:
-            json.dump([], f, ensure_ascii=False, indent=2)
-        logger.info(f"Created placeholder collision set at: {collision_path}")
-
     elapsed = time.time() - start_time
     logger.info(f"Done! Models built in {elapsed:.2f}s.")
 
