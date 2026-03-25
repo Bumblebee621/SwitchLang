@@ -57,3 +57,7 @@ Output/
 # OS
 .DS_Store
 Thumbs.db
+
+# testing and optimization
+evaluation optimisation scripts/
+testing quadgram distances/
