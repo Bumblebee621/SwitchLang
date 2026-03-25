@@ -30,6 +30,8 @@ SolidCompression=yes
 WizardStyle=modern
 ; Detect and close the application if it's already running
 CloseApplications=yes
+CloseApplicationsFilter=SwitchLang.exe
+RestartApplications=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -56,3 +58,16 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 [UninstallRun]
 ; Optional: Kill the process before uninstallation
 Filename: "taskkill"; Parameters: "/F /IM {#MyAppExeName}"; Flags: runhidden; RunOnceId: "KillAppBeforeUninstall"
+
+[Code]
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  // Forcefully kill SwitchLang if it's still running, to ensure the exe
+  // file is not locked when the installer tries to replace it.
+  Exec('taskkill', '/F /IM {#MyAppExeName}', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // Small delay to let the OS fully release the file handle
+  Sleep(500);
+  Result := '';
+end;

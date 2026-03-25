@@ -79,9 +79,14 @@ def download_and_install(url, progress_callback=None):
                     if progress_callback:
                         progress_callback(downloaded, total_size)
                         
-        # Launch the installer and exit
-        subprocess.Popen([installer_path, "/SILENT"], shell=True)
-        sys.exit(0)
+        # Launch the installer and forcefully exit
+        # Using os._exit(0) instead of sys.exit(0) to ensure the process
+        # is fully terminated and the exe file is released before the
+        # installer tries to replace it.
+        import time
+        subprocess.Popen([installer_path, "/SILENT"])
+        time.sleep(1)
+        os._exit(0)
     except Exception as e:
         print(f"Error downloading update: {e}")
         return False
