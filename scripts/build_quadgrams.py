@@ -27,6 +27,20 @@ def _process_chunk(lines, allowed_chars=None):
         # Remove Right-to-Left and Left-to-Right Marks
         line = line.replace('\u200f', '').replace('\u200e', '')
         
+        # Remove hyphen or en-dash if at the start of the line (speaker change indicator)
+        if line.startswith('-') or line.startswith('–'):
+            line = line[1:].lstrip()
+            
+        # Remove artifacts like [laughing] or [ in Pidgin ] at the start of the line
+        if line.startswith('['):
+            close_idx = line.find(']')
+            if close_idx != -1:
+                line = line[close_idx + 1:].lstrip()
+                
+        # Check one more time for a dash in case the sequence was "[artifact] - text"
+        if line.startswith('-') or line.startswith('–'):
+            line = line[1:].lstrip()
+        
         if not line:
             continue
 

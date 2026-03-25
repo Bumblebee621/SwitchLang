@@ -19,8 +19,8 @@ from typing import Optional
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s]: %(message)s')
 logger = logging.getLogger(__name__)
 
-# Number of lines to read from the corpus (10,000,000 lines should be plenty for strong quadgrams)
-MAX_LINES_PER_LANG = 10_000_000
+# Number of lines to read from the corpus (5,000,000 lines should be plenty for strong quadgrams)
+MAX_LINES_PER_LANG = 5_000_000
 
 # Base URL to the OPUS OpenSubtitles raw mono text files
 OPUS_URL_TEMPLATE = "https://object.pouta.csc.fi/OPUS-OpenSubtitles/v2024/mono/{lang}.txt.gz"
@@ -98,21 +98,6 @@ def main():
 
     for lang in ['en', 'he']:
         txt_path = os.path.join(data_dir, f'{lang}_corpus.txt')
-        
-        # Check if we already have a reasonably sized text file
-        # 10M lines of subtitles is roughly 300MB+; 20MB is definitely an old/small corpus.
-        if os.path.exists(txt_path):
-            current_size = os.path.getsize(txt_path)
-            # Threshold: ~20 bytes per line for 10M lines = 200MB. 
-            # If it's smaller than that, it's likely incomplete for the new 10M target.
-            if current_size < 200_000_000:
-                logger.info(f"Removing old/incomplete corpus '{txt_path}' ({current_size // 1_000_000} MB) to reach {MAX_LINES_PER_LANG:,} line target...")
-                os.remove(txt_path)
-            else:
-                logger.info(f"Corpus for '{lang}' already exists ({current_size // 1_000_000} MB). Deduplicating in-place...")
-                deduplicate_file(txt_path)
-                continue
-            
         logger.info(f"Downloading OpenSubtitles corpus for {lang.upper()}...")
         stream_corpus(lang, txt_path, MAX_LINES_PER_LANG)
 

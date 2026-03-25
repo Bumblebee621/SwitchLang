@@ -169,6 +169,7 @@ class SystemTrayApp(QSystemTrayIcon):
 
     def _quit(self):
         """Quit the application."""
+        self.hide()
         self.hook_manager.stop()
         QApplication.instance().quit()
 
