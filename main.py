@@ -3,6 +3,8 @@ SwitchLang — Real-time keyboard layout auto-switcher (EN ↔ HE).
 
 Entry point: loads config, initializes all modules, starts hooks
 and the PyQt6 system tray UI.
+
+Cross-platform: works on Windows and Linux (X11).
 """
 
 import json
@@ -10,13 +12,16 @@ import logging
 import logging.handlers
 import os
 import sys
-import ctypes
 import signal
-from ctypes import wintypes
 from collections import deque
- 
-# Global handle for the single-instance mutex
-_mutex_handle = None
+
+from core.platform import get_platform_backend
+
+# Initialize platform backend early (needed for paths)
+platform = get_platform_backend()
+
+# Global handle for platform-specific single-instance lock
+_platform_ref = platform
 
 # Configure PyInstaller paths
 if getattr(sys, 'frozen', False):
@@ -26,8 +31,8 @@ else:
     BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
     APP_DIR = BUNDLE_DIR
 
-# Keep user data in APPDATA to avoid cluttering the repository
-STORAGE_DIR = os.path.join(os.getenv('APPDATA'), 'SwitchLang')
+# Keep user data in the platform-appropriate config directory
+STORAGE_DIR = platform.get_config_dir()
 
 # Ensure storage directory exists
 os.makedirs(STORAGE_DIR, exist_ok=True)
@@ -53,7 +58,6 @@ class LineRotatingFileHandler(logging.Handler):
             self.handleError(record)
 
 # Custom formatter that trims the logger name to only its last segment
-# (e.g. 'switchlang.hooks' -> 'hooks', 'core.engine' -> 'engine')
 class _ShortNameFormatter(logging.Formatter):
     def format(self, record):
         record.shortname = record.name.rsplit('.', 1)[-1]
@@ -61,7 +65,7 @@ class _ShortNameFormatter(logging.Formatter):
 
 _LOG_FORMAT = '%(asctime)s [%(shortname)s] %(levelname)s: %(message)s'
 _LOG_DATE_FORMAT = '%m-%d %H:%M:%S'
-_log_file_handler = None   # Lazy-created when debug mode is enabled
+_log_file_handler = None
 
 _console_formatter = _ShortNameFormatter(_LOG_FORMAT, datefmt=_LOG_DATE_FORMAT)
 _console_handler = logging.StreamHandler(sys.stdout)
@@ -75,18 +79,11 @@ logger = logging.getLogger('switchlang')
 
 
 def set_debug_mode(enabled):
-    """Toggle expressive logging (file + DEBUG level) on or off.
-
-    When *enabled* is True, attaches a LineRotatingFileHandler to the root
-    logger and drops every ``switchlang.*`` logger to DEBUG.  When False,
-    removes the file handler and restores WARNING level so the app stays
-    completely silent on disk.
-    """
+    """Toggle expressive logging (file + DEBUG level) on or off."""
     global _log_file_handler
     root = logging.getLogger()
 
     if enabled:
-        # Attach file handler (once)
         if _log_file_handler is None:
             _log_file_handler = LineRotatingFileHandler(
                 os.path.join(STORAGE_DIR, 'switchlang.log'),
@@ -97,7 +94,6 @@ def set_debug_mode(enabled):
             root.addHandler(_log_file_handler)
         root.setLevel(logging.DEBUG)
     else:
-        # Remove file handler and silence disk output
         if _log_file_handler and _log_file_handler in root.handlers:
             root.removeHandler(_log_file_handler)
         root.setLevel(logging.WARNING)
@@ -110,6 +106,7 @@ from core.sensitivity import SensitivityManager
 from core.blacklist import BlacklistManager, DEFAULT_BLACKLIST
 from core.hooks import HookManager
 from core.version import __version__
+from core import startup as startup_module
 from ui.tray import SystemTrayApp
 from ui.settings_window import SettingsWindow
 
@@ -120,11 +117,7 @@ COLLISIONS_PATH = os.path.join(DATA_DIR, 'collisions.json')
 
 
 def load_config():
-    """Load configuration from config.json.
-
-    Returns:
-        Dict of configuration values.
-    """
+    """Load configuration from config.json."""
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
             return json.load(f)
@@ -139,19 +132,11 @@ def load_config():
 
 
 def load_stylesheet():
-    """Load the QSS stylesheet and fix relative resource paths.
-
-    Returns:
-        QSS string or empty string if file not found.
-    """
+    """Load the QSS stylesheet and fix relative resource paths."""
     if os.path.exists(STYLE_PATH):
         with open(STYLE_PATH, 'r', encoding='utf-8') as f:
             content = f.read()
             
-            # Fix relative resource paths for PyInstaller bundling.
-            # Convert url("ui/...") and url("data/...") to use absolute paths 
-            # based on BUNDLE_DIR so they resolve correctly even when frozen.
-            # We use forward slashes because QSS expects them even on Windows.
             safe_bundle_dir = BUNDLE_DIR.replace('\\', '/')
             content = content.replace('url("ui/', f'url("{safe_bundle_dir}/ui/')
             content = content.replace('url("data/', f'url("{safe_bundle_dir}/data/')
@@ -176,14 +161,7 @@ def check_data_files():
 
 
 def on_settings_changed(config_data, hook_manager, sensitivity, engine):
-    """Handle settings changes from the UI.
-
-    Args:
-        config_data: New configuration dict.
-        hook_manager: HookManager instance.
-        sensitivity: SensitivityManager instance.
-        engine: EvaluationEngine instance.
-    """
+    """Handle settings changes from the UI."""
     debug = config_data.get('debug_mode', False)
     set_debug_mode(debug)
     hook_manager.set_enabled(config_data.get('enabled', True))
@@ -208,26 +186,18 @@ def on_settings_changed(config_data, hook_manager, sensitivity, engine):
 
 def main():
     """Application entry point."""
-    # Prevent multiple instances using a named Windows Mutex
-    # We prefix with 'Local\' to ensure it's session-specific.
-    mutex_name = "Local\\SwitchLang_Mutex_v1"
-    ERROR_ALREADY_EXISTS = 183
-    
-    # We must keep a reference to this handle for the duration of the app
-    global _mutex_handle
-    _mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_name)
-    last_error = ctypes.windll.kernel32.GetLastError()
-    
-    if last_error == ERROR_ALREADY_EXISTS:
+    global platform
+
+    # Single-instance lock
+    if not platform.set_single_instance_lock('SwitchLang'):
         print("SwitchLang is already running.")
         sys.exit(0)
 
-    # Set AppUserModelID so Windows taskbar groups windows by this ID instead of python.exe
-    try:
-        myappid = u'Bumblebee621.SwitchLang.v1' 
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-    except Exception:
-        pass
+    # Set app ID for window manager grouping
+    platform.set_app_id('Bumblebee621.SwitchLang.v1')
+
+    # Initialize startup module with platform backend
+    startup_module.set_platform(platform)
 
     check_data_files()
 
@@ -252,8 +222,9 @@ def main():
     )
 
     blacklist = BlacklistManager(CONFIG_PATH)
+    blacklist.set_platform(platform)
 
-    hook_manager = HookManager(engine, sensitivity, blacklist, config)
+    hook_manager = HookManager(engine, sensitivity, blacklist, config, platform)
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
@@ -287,26 +258,23 @@ def main():
 
     signal.signal(signal.SIGINT, handle_sigint)
 
-    # A QTimer is needed to allow Python to process signals (like SIGINT) 
-    # because the Qt event loop normally blocks Python's signal handling.
     from PyQt6.QtCore import QTimer
     timer = QTimer()
     timer.start(500)
-    timer.timeout.connect(lambda: None)  # Let the interpreter run
+    timer.timeout.connect(lambda: None)
 
     print('SwitchLang is running in the system tray.')
     print('Right-click the tray icon for options.')
 
     exit_code = app.exec()
 
-    # Cleanup tray icon explicitly to avoid C++ runtime errors on shutdown
+    # Cleanup
     tray.hide()
     tray.deleteLater()
 
     hook_manager.stop()
 
-    if _mutex_handle:
-        ctypes.windll.kernel32.CloseHandle(_mutex_handle)
+    platform.release_single_instance_lock()
 
     sys.exit(exit_code)
 

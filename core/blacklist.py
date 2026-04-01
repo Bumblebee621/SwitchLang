@@ -1,49 +1,55 @@
 """
 blacklist.py — Foreground application polling and dynamic blacklist.
 
-Uses Windows APIs to detect the currently focused application and
-check it against a user-managed blacklist of executables.
+Detects the currently focused application (via the platform backend)
+and checks it against a user-managed blacklist of process names.
 """
 
-import ctypes
-import ctypes.wintypes as wintypes
 import json
 import logging
 import os
 
-user32 = ctypes.windll.user32
-kernel32 = ctypes.windll.kernel32
-psapi = ctypes.windll.psapi
-
 logger = logging.getLogger('switchlang.blacklist')
-
-PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 DEFAULT_BLACKLIST = {
     'keepass.exe', 'keepassxc.exe', '1password.exe',
-    'bitwarden.exe', 'credentialuibroker.exe', 'consent.exe'
+    'bitwarden.exe', 'credentialuibroker.exe', 'consent.exe',
+    # Linux equivalents (matched without .exe by convention)
+    'keepass', 'keepassxc', '1password', 'bitwarden',
 }
 
 IDE_EXECUTABLES = {
-    # JetBrains
+    # JetBrains (Windows)
     'pycharm64.exe', 'pycharm.exe', 'idea64.exe', 'idea.exe',
     'webstorm64.exe', 'webstorm.exe', 'clion64.exe', 'clion.exe',
     'datagrip64.exe', 'datagrip.exe', 'rider64.exe', 'rider.exe',
     'rubymine64.exe', 'rubymine.exe', 'goland64.exe', 'goland.exe',
     'phpstorm64.exe', 'phpstorm.exe', 'studio64.exe', 'studio.exe',
+    # JetBrains (Linux — process names without .exe)
+    'pycharm', 'idea', 'webstorm', 'clion', 'datagrip', 'rider',
+    'rubymine', 'goland', 'phpstorm', 'android-studio',
     # Microsoft
     'code.exe', 'insiders.exe', 'devenv.exe',
+    'code', 'code-insiders',  # Linux
     # Editors
     'vim.exe', 'gvim.exe', 'nvim.exe', 'nvim-qt.exe',
+    'vim', 'gvim', 'nvim', 'nvim-qt',  # Linux
     # Others
     'eclipse.exe', 'netbeans64.exe', 'netbeans.exe',
     'codeblocks.exe', 'qtcreator.exe', 'spyder.exe',
-    'rstudio.exe', 'matlab.exe'
+    'rstudio.exe', 'matlab.exe',
+    'eclipse', 'netbeans', 'codeblocks', 'qtcreator', 'spyder',
+    'rstudio', 'matlab',  # Linux
 }
 
 
 class BlacklistManager:
-    """Manages the set of blacklisted exe names."""
+    """Manages the set of blacklisted process names.
+
+    Process names are stored without OS-specific extensions. On Windows,
+    the full .exe name is used (e.g. 'code.exe'). On Linux, the bare
+    process name is used (e.g. 'code'). The comparison is case-insensitive.
+    """
 
     def __init__(self, config_path):
         """Initialize from config.json.
@@ -54,7 +60,28 @@ class BlacklistManager:
         self.config_path = config_path
         self.blacklisted = set()
         self.tech_apps = set()
+        self._platform = None
         self._load()
+
+    def set_platform(self, platform):
+        """Set the platform backend for foreground process detection.
+
+        Args:
+            platform: PlatformBackend instance.
+        """
+        self._platform = platform
+
+    def get_foreground_exe(self):
+        """Get the process name of the currently focused window.
+
+        Delegates to the platform backend.
+
+        Returns:
+            Process name (e.g. 'code.exe' or 'code'), or '' on failure.
+        """
+        if self._platform is None:
+            return ''
+        return self._platform.get_foreground_process()
 
     def _load(self):
         """Load blacklist from config file."""
@@ -64,10 +91,9 @@ class BlacklistManager:
                     data = json.load(f)
                 user_blacklist = data.get('blacklist', [])
                 self.blacklisted = set(exe.lower() for exe in user_blacklist)
-                # If first time or empty, ensure defaults are added
                 if not self.blacklisted and not user_blacklist:
                     self.blacklisted.update(DEFAULT_BLACKLIST)
-                
+
                 user_tech_apps = data.get('tech_apps', [])
                 self.tech_apps = set(exe.lower() for exe in user_tech_apps)
             except json.JSONDecodeError:
@@ -102,7 +128,7 @@ class BlacklistManager:
         """Add an executable to the blacklist.
 
         Args:
-            exe_name: The .exe filename (e.g. 'code.exe').
+            exe_name: The process name (e.g. 'code.exe' or 'code').
         """
         self.blacklisted.add(exe_name.lower())
         self.save()
@@ -111,69 +137,22 @@ class BlacklistManager:
         """Remove an executable from the blacklist.
 
         Args:
-            exe_name: The .exe filename to remove.
+            exe_name: The process name to remove.
         """
         self.blacklisted.discard(exe_name.lower())
         self.save()
-
-    def get_foreground_exe(self):
-        """Get the executable name of the currently focused window.
-
-        Returns:
-            The .exe filename (e.g. 'notepad.exe'), or '' on failure.
-        """
-        hwnd = user32.GetForegroundWindow()
-        if not hwnd:
-            return ''
-
-        pid = wintypes.DWORD()
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-
-        if pid.value == 0:
-            return ''
-
-        h_process = kernel32.OpenProcess(
-            PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value
-        )
-        if not h_process:
-            return ''
-
-        try:
-            buf = ctypes.create_unicode_buffer(512)
-            size = wintypes.DWORD(512)
-            success = kernel32.QueryFullProcessImageNameW(
-                h_process, 0, buf, ctypes.byref(size)
-            )
-            if success:
-                full_path = buf.value
-                return os.path.basename(full_path).lower()
-            return ''
-        finally:
-            kernel32.CloseHandle(h_process)
-
-    def is_blacklisted(self):
-        """Check if the current foreground app is blacklisted.
-
-        Returns:
-            True if the current foreground exe is in the blacklist.
-        """
-        exe = self.get_foreground_exe()
-        result = exe in self.blacklisted
-        if result:
-            logger.debug('Blacklisted app active: %s', exe)
-        return result
 
     def is_ide_editor(self, exe_name=None):
         """Check if a process is an IDE or code editor.
 
         Args:
-            exe_name: Optional exe name to check. If None, checks foreground app.
+            exe_name: Process name to check.
 
         Returns:
             True if the process is a recognized IDE/editor or custom technical app.
         """
         if exe_name is None:
-            exe_name = self.get_foreground_exe()
+            return False
         exe_lower = exe_name.lower()
         return exe_lower in IDE_EXECUTABLES or exe_lower in self.tech_apps
 
@@ -181,7 +160,7 @@ class BlacklistManager:
         """Get the sorted list of blacklisted executables.
 
         Returns:
-            Sorted list of exe names.
+            Sorted list of process names.
         """
         return sorted(self.blacklisted)
 

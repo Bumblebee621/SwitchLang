@@ -28,7 +28,9 @@ def _create_tray_icon_pixmap(suspended=False):
     painter.drawRoundedRect(0, 0, size, size, 14, 14)
 
     painter.setPen(text_color)
-    font = QFont('Segoe UI', 24, QFont.Weight.Bold)
+    import sys
+    font_family = 'Segoe UI' if sys.platform == 'win32' else 'Sans'
+    font = QFont(font_family, 24, QFont.Weight.Bold)
     painter.setFont(font)
     painter.drawText(
         0, 0, size, size,

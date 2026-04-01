@@ -312,11 +312,12 @@ class SettingsWindow(QMainWindow):
         self.debug_check.toggled.connect(self._toggle_debug_mode)
         dg_layout.addWidget(self.debug_check)
 
-        STORAGE_DIR = os.path.join(os.getenv('APPDATA'), 'SwitchLang')
+        from core.platform import get_platform_backend
+        _storage_dir = get_platform_backend().get_config_dir()
         debug_desc = QLabel(
             'Records ALL keystrokes to the log file for troubleshooting.\n'
             'Passwords and private data may be recorded.\n'
-            f'.SCV and .log files can be found in {STORAGE_DIR}'
+            f'.SCV and .log files can be found in {_storage_dir}'
         )
         debug_desc.setWordWrap(True)
         debug_desc.setStyleSheet('color: #6c7086; font-size: 10px;')
