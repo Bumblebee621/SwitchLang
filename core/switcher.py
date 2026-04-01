@@ -25,6 +25,7 @@ INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004
 VK_BACK = 0x08
+VK_RETURN = 0x0D
 VK_CAPITAL = 0x14
 WM_INPUTLANGCHANGEREQUEST = 0x0050
 KEYEVENTF_EXTENDEDKEY = 0x0001
@@ -135,6 +136,20 @@ def toggle_caps_lock():
     inputs = [
         _make_key_input(vk=VK_CAPITAL),
         _make_key_input(vk=VK_CAPITAL, flags=KEYEVENTF_KEYUP)
+    ]
+    _send_inputs(inputs)
+
+
+def send_vk_key(vk):
+    """Send a single virtual key press (down + up) as a real VK event.
+
+    Unlike send_unicode_string, this sends the key using its virtual key code,
+    so apps that listen for specific VK events (like Discord listening for
+    VK_RETURN to send a message) will recognise it.
+    """
+    inputs = [
+        _make_key_input(vk=vk),
+        _make_key_input(vk=vk, flags=KEYEVENTF_KEYUP),
     ]
     _send_inputs(inputs)
 
@@ -303,6 +318,11 @@ def execute_switch(buffer_active, buffer_shadow,
     set_correcting(True)
 
     try:
+        # Determine if the trigger delimiter needs a real VK event.
+        # Apps like Discord/Chrome require a real VK_RETURN to send a message;
+        # a Unicode '\n' injected via KEYEVENTF_UNICODE is silently ignored.
+        needs_vk_return = (trigger_delimiter == '\n')
+
         if correction_block:
             # Erase: trigger word (minus trigger char if mid-word) +
             #        each ambiguous word and the delimiter after it.
@@ -320,7 +340,7 @@ def execute_switch(buffer_active, buffer_shadow,
                 parts.append(entry.shadow)
                 parts.append(entry.delimiter)
             parts.append(buffer_shadow)
-            if trigger_delimiter:
+            if trigger_delimiter and not needs_vk_return:
                 parts.append(trigger_delimiter)
             inject_text = ''.join(parts)
 
@@ -336,7 +356,7 @@ def execute_switch(buffer_active, buffer_shadow,
                 erase_len -= 1
             
             inject_text = buffer_shadow
-            if trigger_delimiter:
+            if trigger_delimiter and not needs_vk_return:
                 inject_text += trigger_delimiter
 
             logger.info(
@@ -357,6 +377,11 @@ def execute_switch(buffer_active, buffer_shadow,
 
         send_unicode_string(inject_text)
         time.sleep(_CORRECTION_STEP_DELAY)
+
+        # Send Enter as a real VK keypress so apps like Discord recognise it.
+        if needs_vk_return:
+            send_vk_key(VK_RETURN)
+            time.sleep(_CORRECTION_STEP_DELAY)
         # Inject pending queue
         text_to_inject = ""
         consumed_pending = []
