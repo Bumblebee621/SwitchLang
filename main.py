@@ -249,7 +249,17 @@ def main():
     # UI Notifications from Hooks
     hook_manager.set_on_suspend_callback(tray.notify_suspension)
 
-    hook_manager.start()
+    try:
+        hook_manager.start()
+    except PermissionError as e:
+        from PyQt6.QtWidgets import QMessageBox
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Icon.Critical)
+        msg.setWindowTitle("Permission Error")
+        msg.setText("Cannot access the keyboard device.")
+        msg.setInformativeText(str(e))
+        msg.exec()
+        sys.exit(1)
 
     # Handle Ctrl+C gracefully
     def handle_sigint(sig, frame):

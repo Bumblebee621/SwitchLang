@@ -456,11 +456,29 @@ class LinuxX11Backend(PlatformBackend):
             return 'he'
         return 'unknown'
 
+    def _get_target_xkb_layout(self, target):
+        """Find the actual layout string (e.g. 'us', 'gb', 'il') for the given target ('en' or 'he')."""
+        try:
+            result = subprocess.run(
+                ['setxkbmap', '-query'],
+                capture_output=True, text=True, timeout=1
+            )
+            for line in result.stdout.splitlines():
+                if line.strip().startswith('layout:'):
+                    layouts = [l.strip() for l in line.split(':', 1)[1].split(',')]
+                    for l in layouts:
+                        if self._layout_to_lang(l) == target:
+                            return l
+        except Exception:
+            pass
+        # Fallback to defaults
+        return 'us' if target == 'en' else 'il'
+
     def toggle_layout(self, target):
         """Switch keyboard layout using XkbLockGroup via xdotool or xkb-switch."""
         try:
-            # Determine which group index corresponds to the target
-            target_xkb = 'us' if target == 'en' else 'il'
+            # Determine which exact layout identifier corresponds to the target
+            target_xkb = self._get_target_xkb_layout(target)
 
             # Try xkb-switch first (cleanest)
             try:
