@@ -39,15 +39,16 @@ When a switch is triggered, SwitchLang enters a temporary lock state (`is_correc
 
 ## Requirements
 
-- Windows 10/11
+- **Windows**: Windows 10/11
+- **Linux**: Linux with X11 (Mint, Ubuntu, etc.)
 - Python 3.10+
 - English (US) and Hebrew (Standard) keyboard layouts installed.
 
-## Setup
+## Windows Setup
 
 Run the following commands in your terminal (Command Prompt or PowerShell):
 
-```bash
+```powershell
 # 1. Create and activate a virtual environment
 python -m venv .venv
 .venv\Scripts\activate
@@ -61,6 +62,32 @@ python scripts/build_collisions.py
 
 # 4. Start the application
 python main.py
+```
+
+## Linux Setup (X11)
+
+The Linux version requires additional system dependencies and kernel-level input permissions.
+
+```bash
+# 1. Install system dependencies
+sudo apt update && sudo apt install libxcb-cursor0 xdotool
+
+# 2. Grant keyboard permissions (requires logout/login)
+sudo usermod -aG input $USER
+
+# 3. Create and activate a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 4. Install dependencies
+pip install -r requirements.txt
+
+# 5. Generate the language models
+python3 scripts/build_quadgrams.py
+python3 scripts/build_collisions.py
+
+# 6. Start the application
+python3 main.py
 ```
 
 Settings can be accessed by right-clicking the SwitchLang icon in the system tray.

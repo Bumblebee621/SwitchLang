@@ -12,6 +12,8 @@ Implements PlatformBackend using:
 Requires the user to be in the 'input' group for evdev access.
 """
 
+import ctypes
+import ctypes.util
 import fcntl
 import logging
 import os
@@ -122,9 +124,9 @@ class LinuxX11Backend(PlatformBackend):
     """Linux platform backend using evdev + python-xlib."""
 
     def __init__(self):
-        self._keyboard_device = None
+        self._keyboard_devices = []
         self._uinput_device = None
-        self._hook_thread = None
+        self._hook_threads = []
         self._running = False
         self._on_key_down = None
         self._on_key_up = None
@@ -142,6 +144,11 @@ class LinuxX11Backend(PlatformBackend):
 
         _build_keycode_maps()
 
+        # ctypes handle to libX11 and an open Display* for XkbGetState queries.
+        # Lazily initialised once, reused on every 100ms poll (thread-safe: reads only).
+        self._libX11 = None
+        self._x11_display = None  # opaque Display* pointer
+
     # ----- Keyboard Hook -----
 
     def start_keyboard_hook(self, on_key_down, on_key_up):
@@ -151,11 +158,11 @@ class LinuxX11Backend(PlatformBackend):
         self._on_key_up = on_key_up
         self._running = True
 
-        # 1. Find the keyboard device
-        self._keyboard_device = self._find_keyboard_device()
-        if not self._keyboard_device:
+        # 1. Find all keyboard devices
+        self._keyboard_devices = self._find_keyboard_devices()
+        if not self._keyboard_devices:
             logger.error(
-                'Could not find keyboard device. '
+                'Could not find any keyboard devices. '
                 'Is the user in the "input" group? '
                 'Run: sudo usermod -aG input $USER (then log out and back in)'
             )
@@ -166,54 +173,61 @@ class LinuxX11Backend(PlatformBackend):
                 'Then log out and back in.'
             )
 
-        # 2. Create virtual output device (mirrors physical keyboard)
+        # 2. Create virtual output device (mirrors capabilities of the first physical keyboard)
         self._uinput_device = evdev.UInput.from_device(
-            self._keyboard_device,
+            self._keyboard_devices[0],
             name='SwitchLang-Virtual-Keyboard'
         )
 
-        # 3. Grab exclusive access to the physical keyboard
-        self._keyboard_device.grab()
-        logger.info(
-            'Grabbed keyboard: %s (%s)',
-            self._keyboard_device.name, self._keyboard_device.path
-        )
+        # 3. Grab exclusive access to all physical keyboards and start read loops
+        for dev in self._keyboard_devices:
+            try:
+                dev.grab()
+                logger.info('Grabbed keyboard: %s (%s)', dev.name, dev.path)
+            except Exception as e:
+                logger.warning('Could not grab keyboard %s: %s', dev.name, e)
+                continue
 
-        # 4. Start the read loop in a daemon thread
-        self._hook_thread = threading.Thread(
-            target=self._evdev_read_loop,
-            daemon=True,
-            name='EvdevHookThread'
-        )
-        self._hook_thread.start()
+            t = threading.Thread(
+                target=self._evdev_read_loop,
+                args=(dev,),
+                daemon=True,
+                name=f'EvdevHookThread-{os.path.basename(dev.path)}'
+            )
+            t.start()
+            self._hook_threads.append(t)
 
     def stop_keyboard_hook(self):
         self._running = False
 
-        if self._keyboard_device:
-            try:
-                self._keyboard_device.ungrab()
-                logger.info('Released keyboard grab')
-            except Exception:
-                pass
+        if hasattr(self, '_keyboard_devices') and self._keyboard_devices:
+            for dev in self._keyboard_devices:
+                try:
+                    dev.ungrab()
+                except Exception:
+                    pass
+            logger.info('Released keyboard grabs')
 
-        if self._uinput_device:
+        if hasattr(self, '_uinput_device') and self._uinput_device:
             try:
                 self._uinput_device.close()
             except Exception:
                 pass
 
-        if self._hook_thread and self._hook_thread.is_alive():
-            self._hook_thread.join(timeout=2.0)
+        if hasattr(self, '_hook_threads'):
+            for t in self._hook_threads:
+                if t.is_alive():
+                    t.join(timeout=2.0)
 
         logger.info('Keyboard hook stopped')
 
-    def _find_keyboard_device(self):
-        """Auto-detect the primary keyboard from /dev/input/event*."""
+    def _find_keyboard_devices(self):
+        """Auto-detect all primary keyboards from /dev/input/event*."""
         import evdev
         from evdev import ecodes as e
 
         devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
+        found = []
 
         for dev in devices:
             caps = dev.capabilities(verbose=False)
@@ -229,17 +243,17 @@ class LinuxX11Backend(PlatformBackend):
                 if 'switchlang' in dev.name.lower():
                     continue
                 logger.info('Found keyboard: %s at %s', dev.name, dev.path)
-                return dev
+                found.append(dev)
 
-        return None
+        return found
 
-    def _evdev_read_loop(self):
+    def _evdev_read_loop(self, device):
         """Main loop: read events from the physical keyboard, forward or block."""
         from evdev import ecodes as e
         import evdev
 
         try:
-            for event in self._keyboard_device.read_loop():
+            for event in device.read_loop():
                 if not self._running:
                     break
 
@@ -297,12 +311,26 @@ class LinuxX11Backend(PlatformBackend):
     # ----- Input Injection -----
 
     def send_backspaces(self, count):
-        from evdev import ecodes as e
-
-        for _ in range(count):
-            self._uinput_device.write(e.EV_KEY, e.KEY_BACKSPACE, 1)
-            self._uinput_device.syn()
-            self._uinput_device.write(e.EV_KEY, e.KEY_BACKSPACE, 0)
+        if count <= 0:
+            return
+            
+        # Use xdotool for backspaces on X11 instead of uinput to avoid
+        # race conditions. uinput goes through kernel -> evdev -> X11 queues,
+        # whereas xdotool (XTest) bypasses the kernel entirely.
+        # If we mix them, XTest text injections will overtake uinput backspaces,
+        # causing the corrected text to be typed and then immediately deleted.
+        try:
+            subprocess.run(
+                ['xdotool', 'key', '--delay', '0'] + ['BackSpace'] * count,
+                check=True, timeout=2
+            )
+        except Exception as exc:
+            logger.error('xdotool backspace error: %s', exc)
+            # Fallback to uinput if xdotool fails
+            from evdev import ecodes as e
+            for _ in range(count):
+                self._uinput_device.write(e.EV_KEY, e.KEY_BACKSPACE, 1)
+                self._uinput_device.write(e.EV_KEY, e.KEY_BACKSPACE, 0)
             self._uinput_device.syn()
 
     def send_unicode_string(self, text):
@@ -355,74 +383,190 @@ class LinuxX11Backend(PlatformBackend):
     def get_current_layout(self):
         """Detect the current XKB group and map it to 'en' or 'he'."""
         try:
+            # Get the ordered list of configured layouts from setxkbmap
+            layouts = self._get_configured_layouts()
+            if not layouts:
+                return 'unknown'
+
+            group_idx = self._get_xkb_group_index()
+            if group_idx is not None and group_idx < len(layouts):
+                return self._layout_to_lang(layouts[group_idx])
+
+            # Fallback: assume first layout (English)
+            return self._layout_to_lang(layouts[0])
+        except Exception as exc:
+            logger.debug('Error detecting layout: %s', exc)
+            return 'unknown'
+
+    def _get_configured_layouts(self):
+        """Return the ordered list of XKB layout identifiers (e.g. ['us', 'il'])."""
+        try:
             result = subprocess.run(
                 ['setxkbmap', '-query'],
                 capture_output=True, text=True, timeout=2
             )
             if result.returncode != 0:
-                return 'unknown'
-
-            # Parse the 'layout:' line, e.g. "layout:     us,il"
+                return []
             for line in result.stdout.splitlines():
                 if line.strip().startswith('layout:'):
-                    layouts_str = line.split(':', 1)[1].strip()
-                    layouts = [l.strip() for l in layouts_str.split(',')]
-                    break
-            else:
-                return 'unknown'
+                    raw = line.split(':', 1)[1].strip()
+                    return [l.strip() for l in raw.split(',')]
+        except Exception:
+            pass
+        return []
 
-            # Get the current group index from xdotool
-            group_result = subprocess.run(
-                ['xdotool', 'get-active-window', 'get-window-focus', '--shell'],
-                capture_output=True, text=True, timeout=2
+    # ------------------------------------------------------------------
+    # XKB group detection via ctypes + libX11  (no extra dependencies)
+    # ------------------------------------------------------------------
+
+    class _XkbStateRec(ctypes.Structure):
+        """Mirror of XkbStateRec from <X11/XKBlib.h>."""
+        _fields_ = [
+            ('group',               ctypes.c_ubyte),
+            ('locked_group',        ctypes.c_ubyte),
+            ('base_group',          ctypes.c_ushort),
+            ('latched_group',       ctypes.c_ushort),
+            ('mods',                ctypes.c_ubyte),
+            ('base_mods',           ctypes.c_ubyte),
+            ('latched_mods',        ctypes.c_ubyte),
+            ('locked_mods',         ctypes.c_ubyte),
+            ('compat_state',        ctypes.c_ubyte),
+            ('grab_mods',           ctypes.c_ubyte),
+            ('compat_grab_mods',    ctypes.c_ubyte),
+            ('lookup_mods',         ctypes.c_ubyte),
+            ('compat_lookup_mods',  ctypes.c_ubyte),
+            ('ptr_buttons',         ctypes.c_ushort),
+        ]
+
+    _XKB_USE_CORE_KBD = 0x0100
+
+    def _ensure_libx11(self):
+        """Lazily open a Display connection via XkbOpenDisplay.
+
+        XkbOpenDisplay (unlike XOpenDisplay + XkbQueryExtension) allocates
+        the dpy->xkb_info structure that XkbGetState requires internally.
+        Without it, XkbGetState always returns False even if the extension
+        is negotiated.
+
+        Returns True if everything is ready, False if unavailable.
+        """
+        if self._libX11 is not None and self._x11_display is not None:
+            return True
+        try:
+            lib = ctypes.CDLL('libX11.so.6')
+
+            # XkbOpenDisplay allocates full XKB client state (dpy->xkb_info).
+            # Signature: Display *XkbOpenDisplay(char *name, int *ev, int *err,
+            #                                    int *major, int *minor, int *reason)
+            lib.XkbOpenDisplay.restype  = ctypes.c_void_p
+            lib.XkbOpenDisplay.argtypes = [
+                ctypes.c_char_p,               # display name (NULL = $DISPLAY)
+                ctypes.POINTER(ctypes.c_int),  # event_rtrn
+                ctypes.POINTER(ctypes.c_int),  # error_rtrn
+                ctypes.POINTER(ctypes.c_int),  # major_in_out (XkbMajorVersion)
+                ctypes.POINTER(ctypes.c_int),  # minor_in_out (XkbMinorVersion)
+                ctypes.POINTER(ctypes.c_int),  # reason_rtrn
+            ]
+
+            lib.XCloseDisplay.restype  = ctypes.c_int
+            lib.XCloseDisplay.argtypes = [ctypes.c_void_p]
+
+            lib.XkbGetState.restype  = ctypes.c_int   # Bool
+            lib.XkbGetState.argtypes = [
+                ctypes.c_void_p,                    # Display*
+                ctypes.c_uint,                      # device_spec
+                ctypes.POINTER(self._XkbStateRec),  # state_return
+            ]
+
+            major  = ctypes.c_int(1)  # XkbMajorVersion
+            minor  = ctypes.c_int(0)  # XkbMinorVersion
+            event  = ctypes.c_int()
+            error  = ctypes.c_int()
+            reason = ctypes.c_int()
+
+            display_ptr = lib.XkbOpenDisplay(
+                None,
+                ctypes.byref(event), ctypes.byref(error),
+                ctypes.byref(major), ctypes.byref(minor),
+                ctypes.byref(reason),
             )
 
-            # Fallback: use xkblayout-state or xset
-            # For now use a simpler approach via /tmp or xkb-switch
-            group_idx = self._get_xkb_group_index()
-            if group_idx is not None and group_idx < len(layouts):
-                layout = layouts[group_idx]
-                return self._layout_to_lang(layout)
+            # XkbOD_Success = 0
+            if not display_ptr or reason.value != 0:
+                reason_names = {
+                    1: 'BadLibraryVersion', 2: 'ConnectionRefused',
+                    3: 'NonXkbServer',      4: 'BadServerVersion',
+                }
+                logger.warning(
+                    'XkbOpenDisplay failed: reason=%s (%d)',
+                    reason_names.get(reason.value, 'Unknown'), reason.value
+                )
+                return False
 
-            # Fallback: just return based on first layout
-            if layouts:
-                return self._layout_to_lang(layouts[0])
-
-            return 'unknown'
-        except Exception as exc:
-            logger.debug('Error detecting layout: %s', exc)
-            return 'unknown'
+            self._libX11 = lib
+            self._x11_display = display_ptr
+            logger.debug('XkbOpenDisplay succeeded (event_base=%d).', event.value)
+            return True
+        except OSError as exc:
+            logger.warning('Could not load libX11.so.6: %s', exc)
+            return False
 
     def _get_xkb_group_index(self):
-        """Get the current XKB group index using xdotool or xkb-switch."""
+        """Return the current XKB group index (0-based integer).
+
+        Tries, in order:
+        1. ctypes XkbGetState via libX11 (primary, directly queries X server)
+        2. xkb-switch -p
+        3. xset LED mask bits
+        """
+        # --- Primary: ctypes + libX11.XkbGetState ---
         try:
-            # Try xkb-switch first (most reliable)
+            if self._ensure_libx11():
+                state = self._XkbStateRec()
+                ok = self._libX11.XkbGetState(
+                    self._x11_display,
+                    self._XKB_USE_CORE_KBD,
+                    ctypes.byref(state)
+                )
+                # XkbGetState returns Bool (1=True/success, 0=False/error) or Status=0
+                group = int(state.group)
+                if ok or (0 <= group <= 3):
+                    return group
+                logger.debug(
+                    'XkbGetState returned ok=%d with implausible group=%d; '
+                    'resetting display.', ok, group
+                )
+                self._x11_display = None
+                self._libX11 = None
+        except Exception as exc:
+            logger.debug('ctypes XkbGetState error: %s', exc)
+            self._x11_display = None
+            self._libX11 = None
+
+        # --- Fallback 1: xkb-switch (optional package) ---
+        try:
             result = subprocess.run(
                 ['xkb-switch', '-p'],
                 capture_output=True, text=True, timeout=1
             )
             if result.returncode == 0:
-                current = result.stdout.strip()
-                return self._lang_name_to_group(current)
-        except FileNotFoundError:
+                return self._lang_name_to_group(result.stdout.strip())
+        except (FileNotFoundError, Exception):
             pass
 
+        # --- Fallback 2: xset LED mask bits 13-14 (unreliable on compositors) ---
         try:
-            # Fallback: parse xset output for LED mask
             result = subprocess.run(
-                ['xset', '-q'],
-                capture_output=True, text=True, timeout=1
+                ['xset', '-q'], capture_output=True, text=True, timeout=1
             )
             if result.returncode == 0:
                 for line in result.stdout.splitlines():
                     if 'LED mask' in line:
-                        # Group state is in bits 13-14 of the LED mask
                         match = re.search(r'LED mask:\s+(\w+)', line)
                         if match:
                             mask = int(match.group(1), 16)
-                            group = (mask >> 13) & 0x3
-                            return group
-        except FileNotFoundError:
+                            return (mask >> 13) & 0x3
+        except (FileNotFoundError, Exception):
             pass
 
         return None
