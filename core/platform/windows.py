@@ -401,6 +401,10 @@ class WindowsBackend(PlatformBackend):
         if inputs:
             _send_inputs(inputs)
 
+    def replace_text(self, erase_count, text):
+        self.send_backspaces(erase_count)
+        self.send_unicode_string(text)
+
     def send_key(self, keycode):
         inputs = [
             _make_key_input(vk=keycode),

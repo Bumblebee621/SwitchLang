@@ -71,6 +71,18 @@ class PlatformBackend(ABC):
         """
 
     @abstractmethod
+    def replace_text(self, erase_count: int, text: str) -> None:
+        """Batched operation: send backspaces, then inject text.
+        
+        This prevents race conditions on platforms like X11 by guaranteeing
+        execution within the same client connection.
+        
+        Args:
+            erase_count: Number of backspaces to send.
+            text: The string to inject.
+        """
+
+    @abstractmethod
     def send_key(self, keycode: int) -> None:
         """Send a single key press (down + up) using the platform key code.
 

@@ -17,6 +17,7 @@ import ctypes.util
 import fcntl
 import logging
 import os
+import queue
 import re
 import subprocess
 import sys
@@ -134,6 +135,9 @@ class LinuxX11Backend(PlatformBackend):
         self._lock_file = None
         self._lock_fd = None
 
+        self._event_queue = queue.Queue(maxsize=10000)
+        self._worker_thread = None
+
         # Shift state tracking (needed because evdev gives us raw events)
         self._shift_pressed = False
 
@@ -148,6 +152,10 @@ class LinuxX11Backend(PlatformBackend):
         # Lazily initialised once, reused on every 100ms poll (thread-safe: reads only).
         self._libX11 = None
         self._x11_display = None  # opaque Display* pointer
+        self._x11_lock = threading.Lock()
+        
+        self._xlib_display = None
+        self._cached_layouts = None
 
     # ----- Keyboard Hook -----
 
@@ -196,9 +204,20 @@ class LinuxX11Backend(PlatformBackend):
             )
             t.start()
             self._hook_threads.append(t)
+        self._worker_thread = threading.Thread(
+            target=self._evdev_worker_loop,
+            daemon=True,
+            name='EvdevWorkerThread'
+        )
+        self._worker_thread.start()
 
     def stop_keyboard_hook(self):
         self._running = False
+        
+        try:
+            self._event_queue.put(None, timeout=1.0)
+        except Exception:
+            pass
 
         if hasattr(self, '_keyboard_devices') and self._keyboard_devices:
             for dev in self._keyboard_devices:
@@ -218,6 +237,8 @@ class LinuxX11Backend(PlatformBackend):
             for t in self._hook_threads:
                 if t.is_alive():
                     t.join(timeout=2.0)
+        if hasattr(self, '_worker_thread') and self._worker_thread and self._worker_thread.is_alive():
+            self._worker_thread.join(timeout=2.0)
 
         logger.info('Keyboard hook stopped')
 
@@ -256,57 +277,73 @@ class LinuxX11Backend(PlatformBackend):
             for event in device.read_loop():
                 if not self._running:
                     break
-
-                # Only process key events
-                if event.type != e.EV_KEY:
-                    # Forward non-key events (SYN, etc.) as-is
-                    self._uinput_device.write_event(event)
-                    self._uinput_device.syn()
-                    continue
-
-                keycode = event.code
-                vk = _EVDEV_TO_VK.get(keycode)
-
-                if event.value == 1:  # Key down
-                    # Track shift state locally
-                    if keycode in (e.KEY_LEFTSHIFT, e.KEY_RIGHTSHIFT):
-                        self._shift_pressed = True
-
-                    if vk is not None and self._on_key_down:
-                        block = self._on_key_down(vk, self._shift_pressed)
-                        if block:
-                            continue  # Swallow the event
-
-                    # Forward the event
-                    self._uinput_device.write(e.EV_KEY, keycode, 1)
-                    self._uinput_device.syn()
-
-                elif event.value == 0:  # Key up
-                    if keycode in (e.KEY_LEFTSHIFT, e.KEY_RIGHTSHIFT):
-                        self._shift_pressed = False
-
-                    if vk is not None and self._on_key_up:
-                        self._on_key_up(vk)
-
-                    # Always forward key-up (never block releases)
-                    self._uinput_device.write(e.EV_KEY, keycode, 0)
-                    self._uinput_device.syn()
-
-                elif event.value == 2:  # Key repeat
-                    # Check if this key would be blocked on down
-                    if vk is not None and self._on_key_down:
-                        block = self._on_key_down(vk, self._shift_pressed)
-                        if block:
-                            continue
-
-                    self._uinput_device.write(e.EV_KEY, keycode, 2)
-                    self._uinput_device.syn()
-
+                try:
+                    self._event_queue.put(event, block=False)
+                except queue.Full:
+                    logger.critical('Evdev event queue is full! Dropping event from %s', device.name)
         except OSError as exc:
             if self._running:
                 logger.error('Keyboard device read error: %s', exc)
         finally:
             logger.info('evdev read loop exited')
+
+    def _evdev_worker_loop(self):
+        """Worker thread: evaluate events sequentially without blocking the kernel."""
+        from evdev import ecodes as e
+
+        while self._running:
+            try:
+                event = self._event_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            if event is None or not self._running:
+                break
+
+            # Only process key events
+            if event.type != e.EV_KEY:
+                self._uinput_device.write_event(event)
+                continue
+
+            keycode = event.code
+            vk = _EVDEV_TO_VK.get(keycode)
+
+            if event.value == 1:  # Key down
+                if keycode in (e.KEY_LEFTSHIFT, e.KEY_RIGHTSHIFT):
+                    self._shift_pressed = True
+
+                if vk is not None and self._on_key_down:
+                    try:
+                        block = self._on_key_down(vk, self._shift_pressed)
+                        if block:
+                            continue  # Swallow the event
+                    except Exception as exc:
+                        logger.error('Crash in on_key_down: %s', exc, exc_info=True)
+
+                self._uinput_device.write(e.EV_KEY, keycode, 1)
+
+            elif event.value == 0:  # Key up
+                if keycode in (e.KEY_LEFTSHIFT, e.KEY_RIGHTSHIFT):
+                    self._shift_pressed = False
+
+                if vk is not None and self._on_key_up:
+                    try:
+                        self._on_key_up(vk)
+                    except Exception as exc:
+                        logger.error('Crash in on_key_up: %s', exc, exc_info=True)
+
+                self._uinput_device.write(e.EV_KEY, keycode, 0)
+
+            elif event.value == 2:  # Key repeat
+                if vk is not None and self._on_key_down:
+                    try:
+                        block = self._on_key_down(vk, self._shift_pressed)
+                        if block:
+                            continue
+                    except Exception as exc:
+                        logger.error('Crash in on_key_down (repeat): %s', exc, exc_info=True)
+
+                self._uinput_device.write(e.EV_KEY, keycode, 2)
 
     # ----- Input Injection -----
 
@@ -356,6 +393,32 @@ class LinuxX11Backend(PlatformBackend):
         except subprocess.CalledProcessError as exc:
             logger.error('xdotool error: %s', exc)
 
+    def replace_text(self, erase_count, text):
+        """Atomically replace text using a single xdotool command."""
+        if erase_count <= 0 and not text:
+            return
+
+        cmd = ['xdotool']
+        if erase_count > 0:
+            cmd.extend(['key', '--delay', '0'] + ['BackSpace'] * erase_count)
+        if text:
+            cmd.extend(['type', '--clearmodifiers', '--', text])
+
+        try:
+            subprocess.run(cmd, check=True, timeout=5)
+        except Exception as exc:
+            logger.error('xdotool replace_text error: %s', exc)
+            # Fallback to uinput for backspaces if xdotool failed entirely
+            if erase_count > 0:
+                from evdev import ecodes as e
+                for _ in range(erase_count):
+                    self._uinput_device.write(e.EV_KEY, e.KEY_BACKSPACE, 1)
+                    self._uinput_device.write(e.EV_KEY, e.KEY_BACKSPACE, 0)
+                self._uinput_device.syn()
+            
+            if text:
+                logger.warning('xdotool fallback: dropped unicode text payload "%s"', text)
+
     def send_key(self, keycode):
         """Send a key press via uinput (used for Enter, etc.)."""
         from evdev import ecodes as e
@@ -383,12 +446,20 @@ class LinuxX11Backend(PlatformBackend):
     def get_current_layout(self):
         """Detect the current XKB group and map it to 'en' or 'he'."""
         try:
-            # Get the ordered list of configured layouts from setxkbmap
-            layouts = self._get_configured_layouts()
+            # Get the ordered list of configured layouts from setxkbmap (cached)
+            if self._cached_layouts is None:
+                self._cached_layouts = self._get_configured_layouts()
+                
+            layouts = self._cached_layouts
             if not layouts:
                 return 'unknown'
 
             group_idx = self._get_xkb_group_index()
+            # Self-healing cache recovery
+            if group_idx is not None and group_idx >= len(layouts):
+                logger.debug("Layout cache invalidated: group_idx %d >= len(layouts) %d", group_idx, len(layouts))
+                self._cached_layouts = self._get_configured_layouts()
+                layouts = self._cached_layouts
             if group_idx is not None and group_idx < len(layouts):
                 return self._layout_to_lang(layouts[group_idx])
 
@@ -471,6 +542,9 @@ class LinuxX11Backend(PlatformBackend):
             lib.XCloseDisplay.restype  = ctypes.c_int
             lib.XCloseDisplay.argtypes = [ctypes.c_void_p]
 
+            lib.XFlush.restype = ctypes.c_int
+            lib.XFlush.argtypes = [ctypes.c_void_p]
+
             lib.XkbGetState.restype  = ctypes.c_int   # Bool
             lib.XkbGetState.argtypes = [
                 ctypes.c_void_p,                    # Display*
@@ -478,6 +552,12 @@ class LinuxX11Backend(PlatformBackend):
                 ctypes.POINTER(self._XkbStateRec),  # state_return
             ]
 
+            lib.XkbLockGroup.restype = ctypes.c_int   # Bool
+            lib.XkbLockGroup.argtypes = [
+                ctypes.c_void_p,      # Display*
+                ctypes.c_uint,        # device_spec
+                ctypes.c_uint,        # group
+            ]
             major  = ctypes.c_int(1)  # XkbMajorVersion
             minor  = ctypes.c_int(0)  # XkbMinorVersion
             event  = ctypes.c_int()
@@ -513,61 +593,34 @@ class LinuxX11Backend(PlatformBackend):
 
     def _get_xkb_group_index(self):
         """Return the current XKB group index (0-based integer).
-
-        Tries, in order:
-        1. ctypes XkbGetState via libX11 (primary, directly queries X server)
-        2. xkb-switch -p
-        3. xset LED mask bits
+        Uses ctypes XkbGetState via libX11 (primary, directly queries X server).
         """
         # --- Primary: ctypes + libX11.XkbGetState ---
-        try:
-            if self._ensure_libx11():
-                state = self._XkbStateRec()
-                ok = self._libX11.XkbGetState(
-                    self._x11_display,
-                    self._XKB_USE_CORE_KBD,
-                    ctypes.byref(state)
-                )
-                # XkbGetState returns Bool (1=True/success, 0=False/error) or Status=0
-                group = int(state.group)
-                if ok or (0 <= group <= 3):
-                    return group
-                logger.debug(
-                    'XkbGetState returned ok=%d with implausible group=%d; '
-                    'resetting display.', ok, group
-                )
+        with self._x11_lock:
+            try:
+                if self._ensure_libx11():
+                    state = self._XkbStateRec()
+                    ok = self._libX11.XkbGetState(
+                        self._x11_display,
+                        self._XKB_USE_CORE_KBD,
+                        ctypes.byref(state)
+                    )
+                    # XkbGetState returns Bool (1=True/success, 0=False/error) or Status=0
+                    group = int(state.group)
+                    if ok or (0 <= group <= 3):
+                        return group
+                    if self._x11_display:
+                        self._libX11.XCloseDisplay(self._x11_display)
+                    self._x11_display = None
+                    self._libX11 = None
+            except Exception as exc:
+                logger.debug('ctypes XkbGetState error: %s', exc)
+                if self._x11_display:
+                    self._libX11.XCloseDisplay(self._x11_display)
                 self._x11_display = None
                 self._libX11 = None
-        except Exception as exc:
-            logger.debug('ctypes XkbGetState error: %s', exc)
-            self._x11_display = None
-            self._libX11 = None
 
-        # --- Fallback 1: xkb-switch (optional package) ---
-        try:
-            result = subprocess.run(
-                ['xkb-switch', '-p'],
-                capture_output=True, text=True, timeout=1
-            )
-            if result.returncode == 0:
-                return self._lang_name_to_group(result.stdout.strip())
-        except (FileNotFoundError, Exception):
-            pass
-
-        # --- Fallback 2: xset LED mask bits 13-14 (unreliable on compositors) ---
-        try:
-            result = subprocess.run(
-                ['xset', '-q'], capture_output=True, text=True, timeout=1
-            )
-            if result.returncode == 0:
-                for line in result.stdout.splitlines():
-                    if 'LED mask' in line:
-                        match = re.search(r'LED mask:\s+(\w+)', line)
-                        if match:
-                            mask = int(match.group(1), 16)
-                            return (mask >> 13) & 0x3
-        except (FileNotFoundError, Exception):
-            pass
+        return None
 
         return None
 
@@ -619,35 +672,96 @@ class LinuxX11Backend(PlatformBackend):
         return 'us' if target == 'en' else 'il'
 
     def toggle_layout(self, target):
-        """Switch keyboard layout using XkbLockGroup via xdotool or xkb-switch."""
+        """Switch keyboard layout to 'target' ('en' or 'he').
+
+        Strategy (order matters):
+        1. XkbLockGroup — synchronous, driver-level, works on every X11 DE/WM.
+           This is the *only* call that actually changes the X server's active
+           group immediately.  It must be the primary path, not a fallback.
+        2. GSettings notify (fire-and-forget) — tells GNOME/Cinnamon's session
+           daemon what group we just switched to so their UI indicator stays in
+           sync and, crucially, so the daemon does NOT detect the "unsolicited"
+           XKB change and revert it by writing back the old group.
+           We never gate on the exit code of these calls.
+        """
         try:
-            # Determine which exact layout identifier corresponds to the target
             target_xkb = self._get_target_xkb_layout(target)
+            group_idx = self._lang_name_to_group(target_xkb)
 
-            # Try xkb-switch first (cleanest)
-            try:
-                subprocess.run(
-                    ['xkb-switch', '-s', target_xkb],
-                    check=True, timeout=2
+            if group_idx is None:
+                logger.warning('Could not determine group index for layout %s', target)
+                return
+
+            # ----------------------------------------------------------------
+            # Step 1 — XkbLockGroup (synchronous, ground-truth X11 group switch)
+            # ----------------------------------------------------------------
+            xkb_ok = False
+            with self._x11_lock:
+                try:
+                    if self._ensure_libx11():
+                        ok = self._libX11.XkbLockGroup(
+                            self._x11_display,
+                            self._XKB_USE_CORE_KBD,
+                            group_idx,
+                        )
+                        if ok:
+                            self._libX11.XFlush(self._x11_display)
+                            xkb_ok = True
+                            logger.debug(
+                                'XkbLockGroup: switched to group %d (%s)', group_idx, target
+                            )
+                        else:
+                            logger.warning('XkbLockGroup returned failure for group %d.', group_idx)
+                            if self._x11_display:
+                                self._libX11.XCloseDisplay(self._x11_display)
+                            self._x11_display = None
+                            self._libX11 = None
+                except Exception as exc:
+                    logger.debug('Error during XkbLockGroup: %s', exc)
+                    if self._x11_display:
+                        self._libX11.XCloseDisplay(self._x11_display)
+                    self._x11_display = None
+                    self._libX11 = None
+
+            if not xkb_ok:
+                logger.warning(
+                    'XkbLockGroup unavailable; layout switch to %s may be unreliable.', target
                 )
-                logger.debug('Layout switched to %s via xkb-switch', target)
-            except FileNotFoundError:
-                # Fallback: use setxkbmap group locking
-                group_idx = self._lang_name_to_group(target_xkb)
-                if group_idx is not None:
-                    subprocess.run(
-                        ['xdotool', 'key', f'--delay', '0',
-                         f'super+space' if group_idx == 1 else 'super+space'],
-                        timeout=2
-                    )
-                else:
-                    logger.warning('Could not determine group for layout %s', target)
 
-            # Wait for layout to actually change
+            # ----------------------------------------------------------------
+            # Step 2 — GSettings notify (fire-and-forget, DE UI sync only)
+            #
+            # These writes tell the running GNOME/Cinnamon compositor which
+            # group is now active so their on-screen indicator matches and so
+            # they do not revert the XkbLockGroup call above.
+            # We intentionally do NOT use check=True — a non-zero exit (e.g.
+            # schema absent) is perfectly normal and should not mask xkb_ok.
+            # ----------------------------------------------------------------
+            for schema in (
+                'org.cinnamon.desktop.input-sources',
+                'org.gnome.desktop.input-sources',
+            ):
+                try:
+                    subprocess.run(
+                        ['gsettings', 'set', schema, 'current', str(group_idx)],
+                        capture_output=True,
+                        timeout=1,
+                    )
+                except Exception:
+                    pass  # gsettings absent or schema not installed — normal on i3/openbox/etc.
+
+            # ----------------------------------------------------------------
+            # Step 3 — Verify (200 ms budget; XkbLockGroup is synchronous so
+            # the first poll should already return the correct layout)
+            # ----------------------------------------------------------------
             for _ in range(10):
                 if self.get_current_layout() == target:
                     break
-                time.sleep(0.01)
+                time.sleep(0.02)
+            else:
+                logger.warning(
+                    'Layout did not confirm as %s within 200 ms after toggle.', target
+                )
 
         except Exception as exc:
             logger.error('Error toggling layout: %s', exc)
@@ -657,7 +771,59 @@ class LinuxX11Backend(PlatformBackend):
     def get_foreground_process(self):
         """Get the process name of the focused window via _NET_ACTIVE_WINDOW."""
         try:
-            # Get the active window ID
+            import Xlib.display
+            import Xlib.X
+            import Xlib.error
+
+            if self._xlib_display is None:
+                self._xlib_display = Xlib.display.Display()
+
+            disp = self._xlib_display
+            root = disp.screen().root
+            net_active = disp.intern_atom('_NET_ACTIVE_WINDOW')
+            
+            act_win_prop = root.get_full_property(net_active, Xlib.X.AnyPropertyType)
+            if not act_win_prop or not act_win_prop.value:
+                return ''
+                
+            act_win_id = act_win_prop.value[0]
+            if act_win_id == 0:
+                return ''
+                
+            win = disp.create_resource_object('window', act_win_id)
+            net_pid = disp.intern_atom('_NET_WM_PID')
+            pid_prop = win.get_full_property(net_pid, Xlib.X.AnyPropertyType)
+            
+            if not pid_prop or not pid_prop.value:
+                return ''
+                
+            pid = pid_prop.value[0]
+            comm_path = f'/proc/{pid}/comm'
+            if os.path.exists(comm_path):
+                with open(comm_path, 'r') as f:
+                    return f.read().strip().lower()
+            return ''
+            
+        except ImportError:
+            pass  # Fall back to xdotool
+        except Exception as e:
+            try:
+                import Xlib.error
+                if isinstance(e, Xlib.error.BadWindow):
+                    return ''
+                else:
+                    if self._xlib_display is not None:
+                        try:
+                            self._xlib_display.close()
+                        except Exception:
+                            pass
+                    self._xlib_display = None
+                    return ''
+            except ImportError:
+                pass
+
+        # xdotool Fallback
+        try:
             result = subprocess.run(
                 ['xdotool', 'getactivewindow', 'getwindowpid'],
                 capture_output=True, text=True, timeout=2
@@ -669,7 +835,6 @@ class LinuxX11Backend(PlatformBackend):
             if not pid or not pid.isdigit():
                 return ''
 
-            # Read the process name from /proc
             comm_path = f'/proc/{pid}/comm'
             if os.path.exists(comm_path):
                 with open(comm_path, 'r') as f:
@@ -707,18 +872,31 @@ class LinuxX11Backend(PlatformBackend):
         return False
 
     def is_caps_lock_on(self):
-        """Check Caps Lock state via xset or evdev LED state."""
-        try:
-            result = subprocess.run(
-                ['xset', '-q'],
-                capture_output=True, text=True, timeout=1
-            )
-            if result.returncode == 0:
-                for line in result.stdout.splitlines():
-                    if 'Caps Lock' in line:
-                        return 'on' in line.lower().split('caps lock')[1].split()[0]
-        except Exception:
-            pass
+        """Check Caps Lock state natively via libX11."""
+        with self._x11_lock:
+            try:
+                if self._ensure_libx11():
+                    state = self._XkbStateRec()
+                    ok = self._libX11.XkbGetState(
+                        self._x11_display,
+                        self._XKB_USE_CORE_KBD,
+                        ctypes.byref(state)
+                    )
+                    if ok:
+                        # LockMask correctly correlates to bit 2
+                        return bool(state.locked_mods & 2)
+
+                    logger.debug('XkbGetState returned ok=%d; resetting display.', ok)
+                    if self._x11_display:
+                        self._libX11.XCloseDisplay(self._x11_display)
+                    self._x11_display = None
+                    self._libX11 = None
+            except Exception as exc:
+                logger.debug('ctypes XkbGetState error: %s', exc)
+                if self._x11_display:
+                    self._libX11.XCloseDisplay(self._x11_display)
+                self._x11_display = None
+                self._libX11 = None
         return False
 
     # ----- Mouse Listener -----

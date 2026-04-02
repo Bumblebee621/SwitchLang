@@ -100,19 +100,16 @@ def execute_switch(buffer_active, buffer_shadow,
                 erase_len, inject_text
             )
 
-        platform.send_backspaces(erase_len)
+        platform.replace_text(erase_len, inject_text)
         time.sleep(_CORRECTION_STEP_DELAY)
-
-        if fix_caps:
-            platform.toggle_caps_lock()
-            time.sleep(_CORRECTION_STEP_DELAY)
 
         current_layout = platform.get_current_layout()
         if target_layout != current_layout:
             platform.toggle_layout(target_layout)
 
-        platform.send_unicode_string(inject_text)
-        time.sleep(_CORRECTION_STEP_DELAY)
+        if fix_caps:
+            platform.toggle_caps_lock()
+            time.sleep(_CORRECTION_STEP_DELAY)
 
         # Send Enter as a real VK keypress so apps like Discord recognise it.
         if needs_vk_return:
