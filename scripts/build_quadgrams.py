@@ -1,3 +1,8 @@
+"""
+Script to build quadgram language models from text corpora.
+Processes large text files in parallel, extracting bigram, trigram, and quadgram
+frequencies, and saves them as JSON models used by the SwitchLang engine.
+"""
 import json
 import os
 import sys
@@ -16,7 +21,21 @@ logger = logging.getLogger(__name__)
 CHUNK_SIZE = 100_000  # Lines per process
 
 def _process_chunk(lines, allowed_chars=None):
-    """Worker function to process a list of lines and return n-gram counts."""
+    """
+    Worker function to process a list of text lines and return n-gram frequencies.
+    
+    This function cleans the input text by removing specific formatting marks and 
+    speaker indicators, filters out words containing characters outside the allowed set,
+    and then extracts bigrams, trigrams, and quadgrams from valid words.
+    
+    Args:
+        lines (list[str]): A list of string lines to process.
+        allowed_chars (set, optional): A set of characters allowed in valid words.
+            Words containing unallowed characters are discarded.
+            
+    Returns:
+        tuple: (quadgram_counts, trigram_counts, bigram_counts, unique_chars_set)
+    """
     quadgram_counts = Counter()
     trigram_counts = Counter()
     bigram_counts = Counter()
@@ -83,7 +102,20 @@ def _process_chunk(lines, allowed_chars=None):
     return quadgram_counts, trigram_counts, bigram_counts, chars
 
 def build_quadgrams_from_file_parallel(file_path, allowed_chars=None):
-    """Build n-gram models using multiple CPU cores."""
+    """
+    Builds n-gram models via parallel processing from a large text file.
+    
+    Reads the file iteratively, groups lines into chunks, and processes them
+    concurrently using a ProcessPoolExecutor to maximize CPU utilization.
+    
+    Args:
+        file_path (str): The path to the text corpus file.
+        allowed_chars (set, optional): Set of allowed characters for filtering words.
+        
+    Returns:
+        dict: A dictionary containing the aggregated 'quadgram_counts', 
+              'trigram_counts', 'bigram_counts', and the resulting 'vocab_size'.
+    """
     total_quads = Counter()
     total_tris = Counter()
     total_bis = Counter()
@@ -138,6 +170,12 @@ ALLOWED_EN = set("abcdefghijklmnopqrstuvwxyz `~!@#$%^&*()-_=+[{]}\\|;:'\",<.>/?"
 ALLOWED_HE = set("אבגדהוזחטיכלמנסעפצקרשתםןץףך `~!@#$%^&*()-_=+[{]}\\|;:'\",<.>/?")
 
 def main():
+    """
+    Main entry point for the quadgram building script.
+    
+    Ensures corpora are downloaded, triggers the parallel processing for both 
+    English and Hebrew text files, and saves the resulting models as JSON.
+    """
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_dir = os.path.dirname(script_dir)
     data_dir = os.path.join(project_dir, 'data')
