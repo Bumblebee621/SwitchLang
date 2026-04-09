@@ -2,11 +2,10 @@
 linux_x11.py — Linux / X11 platform backend.
 
 Implements PlatformBackend using:
-- evdev + uinput for keyboard hooking and injection (kernel-level,
-  works on both X11 and future Wayland)
+- evdev + uinput for keyboard hooking and injection (kernel-level)
 - python-xlib for layout detection and switching (XkbGetState / XkbLockGroup)
 - /proc filesystem for process detection
-- pynput for mouse listener (X11 only; future Wayland would use evdev)
+- pynput for mouse listener (X11 only)
 - XDG standards for config and autostart
 
 Requires the user to be in the 'input' group for evdev access.
@@ -545,6 +544,9 @@ class LinuxX11Backend(PlatformBackend):
             lib.XFlush.restype = ctypes.c_int
             lib.XFlush.argtypes = [ctypes.c_void_p]
 
+            lib.XSync.restype = ctypes.c_int
+            lib.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]  # Display*, Bool discard
+
             lib.XkbGetState.restype  = ctypes.c_int   # Bool
             lib.XkbGetState.argtypes = [
                 ctypes.c_void_p,                    # Display*
@@ -585,7 +587,7 @@ class LinuxX11Backend(PlatformBackend):
 
             self._libX11 = lib
             self._x11_display = display_ptr
-            logger.debug('XkbOpenDisplay succeeded (event_base=%d).', event.value)
+
             return True
         except OSError as exc:
             logger.warning('Could not load libX11.so.6: %s', exc)
@@ -609,6 +611,7 @@ class LinuxX11Backend(PlatformBackend):
                     group = int(state.group)
                     if ok or (0 <= group <= 3):
                         return group
+
                     if self._x11_display:
                         self._libX11.XCloseDisplay(self._x11_display)
                     self._x11_display = None
@@ -673,98 +676,139 @@ class LinuxX11Backend(PlatformBackend):
 
     def toggle_layout(self, target):
         """Switch keyboard layout to 'target' ('en' or 'he').
-
-        Strategy (order matters):
-        1. XkbLockGroup — synchronous, driver-level, works on every X11 DE/WM.
-           This is the *only* call that actually changes the X server's active
-           group immediately.  It must be the primary path, not a fallback.
-        2. GSettings notify (fire-and-forget) — tells GNOME/Cinnamon's session
-           daemon what group we just switched to so their UI indicator stays in
-           sync and, crucially, so the daemon does NOT detect the "unsolicited"
-           XKB change and revert it by writing back the old group.
-           We never gate on the exit code of these calls.
+        
+        In modern DEs (Cinnamon/GNOME/IBus), the DE is the source of truth.
+        Changing XKB directly via XkbLockGroup causes the DE to detect an 
+        "unsolicited" change and aggressively revert it back to its GSettings state.
+        
+        1. Primary: Tell the DE to switch natively via DBUS/GSettings.
+        2. Verify: Wait for the DE to asynchronously apply the change to the X server.
+        3. Fallback: If no DE daemon applied the change (e.g. running a bare WM),
+           force the change synchronously via XKB.
         """
         try:
-            target_xkb = self._get_target_xkb_layout(target)
-            group_idx = self._lang_name_to_group(target_xkb)
-
+            group_idx = self._resolve_group_index(target)
             if group_idx is None:
-                logger.warning('Could not determine group index for layout %s', target)
+                logger.warning('toggle_layout: cannot resolve group for %s; aborting.', target)
                 return
 
-            # ----------------------------------------------------------------
-            # Step 1 — XkbLockGroup (synchronous, ground-truth X11 group switch)
-            # ----------------------------------------------------------------
-            xkb_ok = False
-            with self._x11_lock:
-                try:
-                    if self._ensure_libx11():
-                        ok = self._libX11.XkbLockGroup(
-                            self._x11_display,
-                            self._XKB_USE_CORE_KBD,
-                            group_idx,
-                        )
-                        if ok:
-                            self._libX11.XFlush(self._x11_display)
-                            xkb_ok = True
-                            logger.debug(
-                                'XkbLockGroup: switched to group %d (%s)', group_idx, target
-                            )
-                        else:
-                            logger.warning('XkbLockGroup returned failure for group %d.', group_idx)
-                            if self._x11_display:
-                                self._libX11.XCloseDisplay(self._x11_display)
-                            self._x11_display = None
-                            self._libX11 = None
-                except Exception as exc:
-                    logger.debug('Error during XkbLockGroup: %s', exc)
-                    if self._x11_display:
-                        self._libX11.XCloseDisplay(self._x11_display)
-                    self._x11_display = None
-                    self._libX11 = None
+            logger.debug('toggle_layout target=%s group=%d', target, group_idx)
 
-            if not xkb_ok:
-                logger.warning(
-                    'XkbLockGroup unavailable; layout switch to %s may be unreliable.', target
-                )
+            # 1. Primary: Tell the DE to switch natively via GSettings.
+            self._gsettings_switch(group_idx)
 
-            # ----------------------------------------------------------------
-            # Step 2 — GSettings notify (fire-and-forget, DE UI sync only)
-            #
-            # These writes tell the running GNOME/Cinnamon compositor which
-            # group is now active so their on-screen indicator matches and so
-            # they do not revert the XkbLockGroup call above.
-            # We intentionally do NOT use check=True — a non-zero exit (e.g.
-            # schema absent) is perfectly normal and should not mask xkb_ok.
-            # ----------------------------------------------------------------
-            for schema in (
-                'org.cinnamon.desktop.input-sources',
-                'org.gnome.desktop.input-sources',
-            ):
-                try:
-                    subprocess.run(
-                        ['gsettings', 'set', schema, 'current', str(group_idx)],
-                        capture_output=True,
-                        timeout=1,
-                    )
-                except Exception:
-                    pass  # gsettings absent or schema not installed — normal on i3/openbox/etc.
-
-            # ----------------------------------------------------------------
-            # Step 3 — Verify (200 ms budget; XkbLockGroup is synchronous so
-            # the first poll should already return the correct layout)
-            # ----------------------------------------------------------------
-            for _ in range(10):
+            # 2. Verify: Wait for the DE to asynchronously apply the change to the X server.
+            # We give it up to 1 second because DE daemons can be slow.
+            for _ in range(50):
                 if self.get_current_layout() == target:
-                    break
+                    logger.debug('toggle_layout: confirmed %s (via DBUS/GSettings)', target)
+                    return
                 time.sleep(0.02)
-            else:
-                logger.warning(
-                    'Layout did not confirm as %s within 200 ms after toggle.', target
-                )
+
+            # 3. Fallback: If no DE daemon applied the change (e.g. running a bare WM),
+            # force the change synchronously via XKB.
+            logger.warning('toggle_layout: GSettings did not confirm %s within 1s. Using XkbLockGroup fallback.', target)
+            self._xkb_lock_group(group_idx)
 
         except Exception as exc:
-            logger.error('Error toggling layout: %s', exc)
+            logger.error('Error in toggle_layout: %s', exc)
+
+    # ── toggle_layout helpers ────────────────────────────────────────────────
+
+    def _resolve_group_index(self, target):
+        """Return the XKB group index (int) for *target* ('en' or 'he').
+
+        Uses the cached layout list so that setxkbmap is only queried once —
+        at startup, before any input-method daemon can hide layouts.  Falls
+        back to _en_group / _he_group if the cache is empty or the target is
+        not listed, covering IBus setups where setxkbmap output is unreliable
+        at runtime.
+        """
+        layouts = self._cached_layouts
+        if not layouts:
+            layouts = self._get_configured_layouts()
+            self._cached_layouts = layouts
+
+        if layouts:
+            for i, name in enumerate(layouts):
+                if self._layout_to_lang(name) == target:
+                    return i
+
+        fallback = self._he_group if target == 'he' else self._en_group
+        logger.debug(
+            '_resolve_group_index: "%s" not in cached layouts %s; using hardcoded group %d',
+            target, layouts, fallback,
+        )
+        return fallback
+
+    def _gsettings_switch(self, group_idx):
+        """Fire native DBUS and gsettings for GNOME and Cinnamon (best-effort)."""
+        # 1. Cinnamon native DBus
+        try:
+            subprocess.run([
+                'dbus-send', '--session', '--dest=org.Cinnamon',
+                '--type=method_call', '/org/Cinnamon',
+                'org.Cinnamon.ActivateInputSourceIndex',
+                f'int32:{group_idx}'
+            ], capture_output=True, timeout=1)
+        except Exception:
+            pass
+
+        # 2. GNOME native DBus
+        try:
+            subprocess.run([
+                'gdbus', 'call', '--session', '--dest', 'org.gnome.Shell',
+                '--object-path', '/org/gnome/Shell',
+                '--method', 'org.gnome.Shell.Eval',
+                f'imports.ui.status.keyboard.getInputSourceManager().inputSources[{group_idx}].activate()'
+            ], capture_output=True, timeout=1)
+        except Exception:
+            pass
+
+        # 3. GSettings fallback for pure UI syncing
+        for schema in (
+            'org.gnome.desktop.input-sources',
+            'org.cinnamon.desktop.input-sources',
+        ):
+            try:
+                subprocess.run(
+                    ['gsettings', 'set', schema, 'current', str(group_idx)],
+                    capture_output=True, timeout=1,
+                )
+            except Exception:
+                pass
+
+    def _xkb_lock_group(self, group_idx):
+        """Call XkbLockGroup + XSync.  Returns True on success, False otherwise."""
+        with self._x11_lock:
+            try:
+                if not self._ensure_libx11():
+                    return False
+                ok = self._libX11.XkbLockGroup(
+                    self._x11_display,
+                    self._XKB_USE_CORE_KBD,
+                    group_idx,
+                )
+                if ok:
+                    # XSync waits for the server to finish processing the
+                    # request, guaranteeing uinput events injected afterwards
+                    # are translated with the new group.
+                    self._libX11.XSync(self._x11_display, 0)
+                    logger.debug('_xkb_lock_group: group → %d', group_idx)
+                    return True
+                logger.warning('XkbLockGroup returned failure for group %d', group_idx)
+                if self._x11_display:
+                    self._libX11.XCloseDisplay(self._x11_display)
+                self._x11_display = None
+                self._libX11 = None
+                return False
+            except Exception as exc:
+                logger.debug('XkbLockGroup error: %s', exc)
+                if self._x11_display:
+                    self._libX11.XCloseDisplay(self._x11_display)
+                self._x11_display = None
+                self._libX11 = None
+                return False
 
     # ----- System Queries -----
 
@@ -886,7 +930,7 @@ class LinuxX11Backend(PlatformBackend):
                         # LockMask correctly correlates to bit 2
                         return bool(state.locked_mods & 2)
 
-                    logger.debug('XkbGetState returned ok=%d; resetting display.', ok)
+
                     if self._x11_display:
                         self._libX11.XCloseDisplay(self._x11_display)
                     self._x11_display = None

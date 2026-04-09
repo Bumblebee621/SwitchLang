@@ -100,6 +100,11 @@ def execute_switch(buffer_active, buffer_shadow,
                 erase_len, inject_text
             )
 
+        # Pipeline Synchronization: Wait for the kernel uinput queue to drain into the X server.
+        # This prevents the user-space xdotool (XTEST) from overtaking the final gibberish
+        # keystrokes traversing the kernel and deleting the wrong characters.
+        time.sleep(0.05)
+
         platform.replace_text(erase_len, inject_text)
         time.sleep(_CORRECTION_STEP_DELAY)
 

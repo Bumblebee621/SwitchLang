@@ -21,10 +21,7 @@ def get_platform_backend():
         from core.platform.windows import WindowsBackend
         return WindowsBackend()
     elif sys.platform == 'linux':
-        # Future: detect Wayland vs X11
-        # if os.environ.get('WAYLAND_DISPLAY'):
-        #     from core.platform.linux_wayland import LinuxWaylandBackend
-        #     return LinuxWaylandBackend()
+
         from core.platform.linux_x11 import LinuxX11Backend
         return LinuxX11Backend()
     else:
