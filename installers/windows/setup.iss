@@ -22,9 +22,9 @@ ChangesAssociations=yes
 DisableProgramGroupPage=yes
 ; Run in non administrative install mode (install for current user only.)
 PrivilegesRequired=lowest
-OutputDir=Output
+OutputDir=..\..\Output
 OutputBaseFilename=SwitchLang_Setup
-SetupIconFile=data\icon.ico
+SetupIconFile=..\..\data\icon.ico
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
@@ -41,7 +41,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "startup"; Description: "Run {#MyAppName} when Windows starts"; GroupDescription: "Additional options:"
 
 [Files]
-Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]

@@ -44,6 +44,18 @@ When a switch is triggered, SwitchLang enters a temporary lock state (`is_correc
 - Python 3.10+
 - English (US) and Hebrew (Standard) keyboard layouts installed.
 
+## Linux — Easy Install
+
+Run this one-liner in your terminal. It installs all dependencies, downloads the latest binary, and sets SwitchLang to start automatically on login:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Bumblebee621/SwitchLang/main/installers/linux/install.sh | bash
+```
+
+> **Note:** After installation, you must **log out and log back in** once for keyboard permissions to take effect (the script adds your user to the `input` group).
+
+---
+
 ## Windows Setup
 
 Run the following commands in your terminal (Command Prompt or PowerShell):

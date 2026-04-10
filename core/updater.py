@@ -12,6 +12,9 @@ from core.version import __version__
 REPO = "Bumblebee621/SwitchLang"
 GITHUB_API_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 
+# Asset name varies by platform
+_ASSET_NAME = "SwitchLang_Setup.exe" if sys.platform == "win32" else "SwitchLang"
+
 def check_for_updates():
     """
     Checks GitHub for a newer version.
@@ -27,9 +30,9 @@ def check_for_updates():
             return None, None
             
         if _is_version_higher(latest_tag, __version__):
-            # Look for SwitchLang_Setup.exe in assets
+            # Look for the platform-appropriate asset
             for asset in data.get("assets", []):
-                if asset["name"] == "SwitchLang_Setup.exe":
+                if asset["name"] == _ASSET_NAME:
                     return latest_tag, asset["browser_download_url"]
             
             # Fallback to the first asset if specifically named one not found
@@ -58,7 +61,9 @@ def _is_version_higher(latest, current):
 
 def download_and_install(url, progress_callback=None):
     """
-    Downloads the installer and runs it.
+    Downloads the update and installs it.
+    On Windows: runs the Inno Setup installer silently.
+    On Linux: replaces the current binary in-place and relaunches.
     progress_callback: function(current_bytes, total_bytes)
     """
     try:
@@ -68,7 +73,7 @@ def download_and_install(url, progress_callback=None):
         total_size = int(response.headers.get('content-length', 0))
         
         temp_dir = tempfile.gettempdir()
-        installer_path = os.path.join(temp_dir, "SwitchLang_Setup.exe")
+        installer_path = os.path.join(temp_dir, _ASSET_NAME)
         
         downloaded = 0
         with open(installer_path, "wb") as f:
@@ -78,15 +83,33 @@ def download_and_install(url, progress_callback=None):
                     downloaded += len(chunk)
                     if progress_callback:
                         progress_callback(downloaded, total_size)
-                        
-        # Launch the installer and forcefully exit
-        # Using os._exit(0) instead of sys.exit(0) to ensure the process
-        # is fully terminated and the exe file is released before the
-        # installer tries to replace it.
-        import time
-        subprocess.Popen([installer_path, "/SILENT"])
-        time.sleep(1)
-        os._exit(0)
+
+        if sys.platform == "win32":
+            # Launch the Inno Setup installer silently, then exit
+            # Using os._exit(0) instead of sys.exit(0) to ensure the process
+            # is fully terminated and the exe file is released before the
+            # installer tries to replace it.
+            import time
+            subprocess.Popen([installer_path, "/SILENT"])
+            time.sleep(1)
+            os._exit(0)
+        else:
+            # Linux: replace the running binary with the downloaded one,
+            # then relaunch from the new version.
+            import stat
+            os.chmod(installer_path, os.stat(installer_path).st_mode | stat.S_IEXEC)
+            current_binary = sys.executable if getattr(sys, 'frozen', False) else None
+            if current_binary:
+                import shutil
+                shutil.move(installer_path, current_binary)
+                subprocess.Popen([current_binary])
+            else:
+                subprocess.Popen([installer_path])
+            import time
+            time.sleep(1)
+            os._exit(0)
+
     except Exception as e:
         print(f"Error downloading update: {e}")
         return False
+

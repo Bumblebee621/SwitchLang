@@ -18,7 +18,7 @@ except ImportError:
     sys.exit(1)
 
 def sync_inno_setup(version):
-    iss_path = os.path.join(project_dir, 'setup.iss')
+    iss_path = os.path.join(project_dir, 'installers', 'windows', 'setup.iss')
     if not os.path.exists(iss_path):
         print(f"Warning: {iss_path} not found.")
         return
