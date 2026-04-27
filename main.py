@@ -198,7 +198,8 @@ def on_settings_changed(config_data, hook_manager, sensitivity, engine):
     # Suspension Config
     hook_manager.set_suspend_config(
         config_data.get('suspend_keybind_vks', []),
-        config_data.get('suspend_duration_sec', 60)
+        config_data.get('suspend_duration_sec', 60),
+        config_data.get('suspend_switch_layout', False)
     )
     # Model Mode
     mode = config_data.get('model_mode', 'standard')

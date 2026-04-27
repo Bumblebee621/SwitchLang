@@ -245,6 +245,7 @@ class HookManager:
             config.get('suspend_keybind_vks', [])
         )
         self._suspend_duration = config.get('suspend_duration_sec', 60)
+        self._suspend_switch_layout = config.get('suspend_switch_layout', False)
         self._suspended_until = 0.0       # monotonic timestamp
         self._on_suspend_callback = None
 
@@ -267,10 +268,11 @@ class HookManager:
         """Set a callback for when the engine is suspended/resumed (e.g. for UI)."""
         self._on_suspend_callback = callback
 
-    def set_suspend_config(self, keybind_vks, duration_sec):
+    def set_suspend_config(self, keybind_vks, duration_sec, switch_layout=False):
         """Update the suspension hotkey and duration at runtime."""
         self._suspend_keybind = frozenset(keybind_vks)
         self._suspend_duration = duration_sec
+        self._suspend_switch_layout = switch_layout
 
     def set_model_mode(self, mode):
         """Update the model selection mode (standard, smart, technical)."""
@@ -314,6 +316,14 @@ class HookManager:
                 self._clear_buffers()
                 self._clear_history()
                 logger.info('Engine suspended for %d seconds', self._suspend_duration)
+
+                if self._suspend_switch_layout:
+                    target = 'he' if self._cached_layout == 'en' else 'en'
+                    self._cached_layout = target
+                    from core.switcher import toggle_layout
+                    threading.Thread(target=toggle_layout, args=(target,), daemon=True).start()
+                    logger.info('Layout switched to %s on suspend', target)
+
             if self._on_suspend_callback:
                 self._on_suspend_callback(self.is_suspended)
             return True

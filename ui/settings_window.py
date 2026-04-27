@@ -290,6 +290,11 @@ class SettingsWindow(QMainWindow):
 
         susp_layout.addLayout(key_row)
 
+        self.suspend_switch_check = QCheckBox('Switch keyboard layout on press')
+        self.suspend_switch_check.setStyleSheet('color: #a6adc8;')
+        self.suspend_switch_check.toggled.connect(self._apply_settings)
+        susp_layout.addWidget(self.suspend_switch_check)
+
         dur_row = QHBoxLayout()
         dur_row.addWidget(QLabel('Duration (seconds):'))
         self.suspend_duration_spin = NoWheelSpinBox()
@@ -627,6 +632,7 @@ class SettingsWindow(QMainWindow):
         self._suspend_vks = data.get('suspend_keybind_vks', [])
         self.keybind_btn.setText(vk_list_to_label(self._suspend_vks))
         self.suspend_duration_spin.setValue(data.get('suspend_duration_sec', 60))
+        self.suspend_switch_check.setChecked(data.get('suspend_switch_layout', False))
 
         self.blacklist_widget.clear()
         for exe in self.blacklist_manager.get_list():
@@ -656,6 +662,7 @@ class SettingsWindow(QMainWindow):
         data['baseline_delta'] = self.sensitivity_slider.value() / 10.0
         data['suspend_keybind_vks'] = self._suspend_vks
         data['suspend_duration_sec'] = self.suspend_duration_spin.value()
+        data['suspend_switch_layout'] = self.suspend_switch_check.isChecked()
         
         if self.model_tech_radio.isChecked():
             data['model_mode'] = 'technical'
