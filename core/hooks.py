@@ -21,7 +21,7 @@ import time
 
 from pynput import mouse as pynput_mouse
 
-from core.keymap import get_both_chars
+from core.keymap import get_both_chars, vk_to_char
 from core.switcher import execute_switch, get_current_layout
 
 logger = logging.getLogger('switchlang.hooks')
@@ -440,11 +440,17 @@ class HookManager:
             elif self.history_deque:
                 # Cross-boundary backspace: the user is deleting the delimiter
                 # that separated the current (empty) word from the previous one.
-                # Pop the previous word from history and restore it into the
-                # buffers so lookback stays in sync with what's on screen.
-                prev = self.history_deque.pop()
-                self.buffer_active = prev.active
-                self.buffer_shadow = prev.shadow
+                last = self.history_deque[-1]
+                if len(last.delimiter) > 1:
+                    # Multi-character delimiter (e.g. Space + Enter). 
+                    # Just erase the last delimiter character.
+                    self.history_deque[-1] = last._replace(delimiter=last.delimiter[:-1])
+                else:
+                    # Pop the previous word from history and restore it into the
+                    # buffers so lookback stays in sync with what's on screen.
+                    prev = self.history_deque.pop()
+                    self.buffer_active = prev.active
+                    self.buffer_shadow = prev.shadow
             return False
 
         # 4. Handle Delimiters (Space, Enter, Tab) — TRIGGER TIER 1 EVALUATION
@@ -494,6 +500,13 @@ class HookManager:
                 ))
 
                 self.sensitivity.on_word_complete()
+            elif self.history_deque:
+                # The user typed a delimiter on an empty buffer.
+                # This usually means consecutive delimiters (e.g., Space then Enter).
+                # Append this delimiter to the last word's delimiter string so it's erased properly.
+                last = self.history_deque.pop()
+                self.history_deque.append(last._replace(delimiter=last.delimiter + delimiter_char))
+                
             self._clear_buffers()
             return False
 
@@ -598,41 +611,67 @@ class HookManager:
     def _do_switch(self, buf_active, buf_shadow, target,
                    correction_block=None, trigger_delimiter=None,
                    caps_fix=False):
-        """Background thread worker to execute the erase/toggle/inject sequence."""
+        """Background thread worker to execute the erase/toggle/inject sequence.
+
+        Owns the full is_correcting lock lifecycle: the lock is held from
+        before the thread starts (_trigger_switch) until ALL post-correction
+        work (pending queue drain + buffer integration) is complete. This
+        prevents the hook thread from racing on buffer_active/buffer_shadow.
+        """
         # Pre-emptive cache update: prevents hook from processing keys with old layout
         # before 'is_correcting' gets flipped back to False.
         self._cached_layout = target
 
-        consumed_items = execute_switch(
-            buf_active,
-            buf_shadow,
-            self.pending_queue,
-            self._set_correcting,
-            target,
-            correction_block=correction_block,
-            trigger_delimiter=trigger_delimiter,
-            fix_caps=caps_fix,
-        )
+        try:
+            execute_switch(
+                buf_active,
+                buf_shadow,
+                target,
+                correction_block=correction_block,
+                trigger_delimiter=trigger_delimiter,
+                fix_caps=caps_fix,
+            )
 
-        # IMPORTANT: Integrate pending characters into the buffers so the engine
-        # knows about the FULL word currently on screen.
-        for q_vk, q_shift, q_caps in (consumed_items or []):
-            # If the user typed a delimiter (Space/Enter) while the switch was
-            # happening, it means the current word is finished. Clear buffers.
-            if q_vk in DELIMITER_VKS:
-                self._clear_buffers()
-                continue
+            # Drain pending_queue and inject/integrate while still locked.
+            # This guarantees no keys are lost (they're all either drained
+            # here or will arrive after is_correcting is False and go through
+            # normal _handle_keypress).
+            text_to_inject = ""
+            consumed_items = []
+            while self.pending_queue:
+                item = self.pending_queue.popleft()
+                consumed_items.append(item)
+                q_vk, q_shift, q_caps = item
 
-            en_ch, he_ch = get_both_chars(q_vk, q_shift, q_caps)
-            if en_ch:
-                if target == 'en':
-                    self.buffer_active += en_ch
-                    self.buffer_shadow += he_ch
-                else:
-                    self.buffer_active += he_ch
-                    self.buffer_shadow += en_ch
+                ch = vk_to_char(q_vk, q_shift, layout=target, caps_lock=q_caps)
+                if ch:
+                    text_to_inject += ch
 
-        self.sensitivity.reset(reason='layout_switch')
+            if text_to_inject:
+                from core.switcher import send_string_as_keys
+                send_string_as_keys(text_to_inject, target)
+
+            # Integrate pending characters into the buffers so the engine
+            # knows about the FULL word currently on screen.
+            for q_vk, q_shift, q_caps in consumed_items:
+                if q_vk in DELIMITER_VKS:
+                    self._clear_buffers()
+                    continue
+
+                en_ch, he_ch = get_both_chars(q_vk, q_shift, q_caps)
+                if en_ch:
+                    if target == 'en':
+                        self.buffer_active += en_ch
+                        self.buffer_shadow += he_ch
+                    else:
+                        self.buffer_active += he_ch
+                        self.buffer_shadow += en_ch
+
+            self.sensitivity.reset(reason='layout_switch')
+        except Exception:
+            logger.exception('Error in switch thread')
+        finally:
+            self._set_correcting(False)
 
         if self._on_switch_callback:
             self._on_switch_callback()
