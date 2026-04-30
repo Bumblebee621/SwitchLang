@@ -422,6 +422,13 @@ class HookManager:
             self._clear_history()
             return False
 
+        # Caps Lock toggle: treat as CRE to avoid mixed buffers.
+        if vk_code == VK_CAPITAL:
+            self.sensitivity.reset(reason='caps_lock')
+            self._clear_buffers()
+            self._clear_history()
+            return False
+
         # Reset sensitivity timer on every active keystroke
         self.sensitivity.record_keystroke()
 
@@ -446,7 +453,12 @@ class HookManager:
 
             if self.buffer_active:
                 current = self._cached_layout
-                
+
+                # When Hebrew layout + Caps Lock, screen shows English.
+                # Buffers already reflect this (set in step 5), so evaluate as English.
+                caps_lock = _is_caps_lock_on()
+                effective_layout = 'en' if (current == 'he' and caps_lock) else current
+
                 # Determine effective evaluation mode
                 eff_mode = self.model_mode
                 if eff_mode == 'smart':
@@ -456,23 +468,20 @@ class HookManager:
                     self.buffer_active,
                     self.buffer_shadow,
                     self.sensitivity.delta,
-                    current_layout=current,
+                    current_layout=effective_layout,
                     on_delimiter=True,
                     mode=eff_mode
                 )
                 
                 logger.debug(
-                    'EVAL: "%s" (%s) -> "%s" | diff=%+.2f vs delta=%.2f | switch=%s | colliding=%s | ambiguous=%s',
-                    self.buffer_active, current, self.buffer_shadow, diff,
+                    'EVAL: "%s" (%s/%s) -> "%s" | diff=%+.2f vs delta=%.2f | switch=%s | colliding=%s | ambiguous=%s',
+                    self.buffer_active, current, effective_layout, self.buffer_shadow, diff,
                     self.sensitivity.delta, should_switch, is_colliding, is_ambiguous
                 )
 
-                # Special Case: Hebrew + Caps Lock = Incorrect English.
-                caps_lock = _is_caps_lock_on()
-                needs_caps_fix = current == 'he' and caps_lock and not should_switch
-
-                if should_switch or needs_caps_fix:
-                    if self._trigger_switch(delimiter_char=delimiter_char, force_target=current if needs_caps_fix else None):
+                if should_switch:
+                    is_caps_fix = (current == 'he' and caps_lock)
+                    if self._trigger_switch(delimiter_char=delimiter_char, caps_fix=is_caps_fix):
                         return True
 
                 # Not a switch? Store word for potential future retroactive correction.
@@ -495,15 +504,17 @@ class HookManager:
             return False
 
         current = self._cached_layout
-        if current == 'en':
+
+        # When Hebrew layout + Caps Lock, Windows outputs English on screen.
+        # Treat the effective layout as English so buffers match reality.
+        effective_layout = 'en' if (current == 'he' and caps_lock) else current
+
+        if effective_layout == 'en':
             self.buffer_active += en_char
             self.buffer_shadow += he_char
-        elif current == 'he':
+        else:
             self.buffer_active += he_char
             self.buffer_shadow += en_char
-        else:
-            self.buffer_active += en_char
-            self.buffer_shadow += he_char
 
         # Only run mid-word scoring after 3+ characters to avoid false switches.
         if len(self.buffer_active) >= 3:
@@ -516,63 +527,54 @@ class HookManager:
                 self.buffer_active,
                 self.buffer_shadow,
                 self.sensitivity.delta,
-                current_layout=current,
+                current_layout=effective_layout,
                 mode=eff_mode
             )
             logger.debug(
-                    'EVAL: "%s" (%s) -> "%s" | diff=%+.2f vs delta=%.2f | switch=%s | colliding=%s | ambiguous=%s',
-                    self.buffer_active, current, self.buffer_shadow, diff,
+                    'EVAL: "%s" (%s/%s) -> "%s" | diff=%+.2f vs delta=%.2f | switch=%s | colliding=%s | ambiguous=%s',
+                    self.buffer_active, current, effective_layout, self.buffer_shadow, diff,
                     self.sensitivity.delta, should_switch, is_colliding, is_ambiguous
                 )
-            
-            caps_lock = _is_caps_lock_on()
-            needs_caps_fix = current == 'he' and caps_lock and not should_switch
 
-            if should_switch or needs_caps_fix:
-                if self._trigger_switch(force_target=current if needs_caps_fix else None):
+            if should_switch:
+                is_caps_fix = (current == 'he' and caps_lock)
+                if self._trigger_switch(caps_fix=is_caps_fix):
                     return True
 
         return False
 
-    def _trigger_switch(self, delimiter_char=None, force_target=None):
+    def _trigger_switch(self, delimiter_char=None, caps_fix=False):
         """Prepare metadata and launch the async Switcher thread.
         
         Args:
             delimiter_char: Delimiter that triggered the switch, if any.
-            force_target: Target layout override (used for Caps Lock fix).
+            caps_fix: If True, this is a Caps Lock correction (HE layout + Caps ON,
+                      user intended Hebrew). Stay in HE, toggle Caps Lock off.
             
         Returns:
             True if a switch sequence was officially started.
         """
         current = self._cached_layout
-        target = force_target if force_target is not None else ('he' if current == 'en' else 'en')
-        fix_caps = False
 
-        # 1. Determine if we are just fixing Caps Lock within the same layout.
-        caps_lock = _is_caps_lock_on()
-        if current == 'he' and caps_lock:
-            if target == 'en':
-                # User intended English (HEB+CAPS=ENG). Per spec, we allow this manually.
-                logger.debug('English intent detected in Hebrew layout with Caps Lock ON - ignoring switch')
-                return False
-
-            # User intended Hebrew but Caps was on. Stay in Hebrew, but fix Caps Lock.
+        if caps_fix:
+            # HE+CapsLock: user meant Hebrew. Stay in Hebrew, just fix Caps Lock.
             target = 'he'
-            fix_caps = True
+        else:
+            target = 'he' if current == 'en' else 'en'
 
-        # 2. Build the lookback correction block BEFORE clearing history.
+        # Build the lookback correction block BEFORE clearing history.
         correction_block = self._build_correction_block()
 
         logger.info(
-            'SWITCHING: "%s" -> "%s" (layout %s -> %s, fix_caps=%s) lookback=%d words',
+            'SWITCHING: "%s" -> "%s" (layout %s -> %s, caps_fix=%s) lookback=%d words',
             self.buffer_active, self.buffer_shadow, current, target,
-            fix_caps, len(correction_block)
+            caps_fix, len(correction_block)
         )
 
         buf_active = self.buffer_active
         buf_shadow = self.buffer_shadow
         
-        # 3. Clean up manager state before handing off to the thread.
+        # Clean up manager state before handing off to the thread.
         if delimiter_char is not None:
             self._clear_buffers()
         else:
@@ -582,19 +584,11 @@ class HookManager:
 
         self._clear_history()
 
-        if fix_caps:
-            # Swap buffers so switcher erases the "bad" English and injects "intended" Hebrew.
-            buf_active, buf_shadow = buf_shadow, buf_active
-            correction_block = [
-                _WordEntry(active=e.shadow, shadow=e.active, delimiter=e.delimiter, is_colliding=e.is_colliding, is_ambiguous=e.is_ambiguous)
-                for e in correction_block
-            ]
-
-        # 4. Lock the main hook (synchronously) and spin up the heavy-lifter thread.
+        # Lock the main hook (synchronously) and spin up the heavy-lifter thread.
         self._set_correcting(True)
         switch_thread = threading.Thread(
             target=self._do_switch,
-            args=(buf_active, buf_shadow, target, correction_block, delimiter_char, fix_caps),
+            args=(buf_active, buf_shadow, target, correction_block, delimiter_char, caps_fix),
             daemon=True,
             name='SwitchThread'
         )
@@ -603,7 +597,7 @@ class HookManager:
 
     def _do_switch(self, buf_active, buf_shadow, target,
                    correction_block=None, trigger_delimiter=None,
-                   fix_caps=False):
+                   caps_fix=False):
         """Background thread worker to execute the erase/toggle/inject sequence."""
         # Pre-emptive cache update: prevents hook from processing keys with old layout
         # before 'is_correcting' gets flipped back to False.
@@ -617,7 +611,7 @@ class HookManager:
             target,
             correction_block=correction_block,
             trigger_delimiter=trigger_delimiter,
-            fix_caps=fix_caps,
+            fix_caps=caps_fix,
         )
 
         # IMPORTANT: Integrate pending characters into the buffers so the engine
