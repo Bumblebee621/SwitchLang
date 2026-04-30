@@ -45,6 +45,10 @@ When a switch is triggered, SwitchLang enters a temporary lock state (`is_correc
 
 ## Setup
 
+**The easiest way to install SwitchLang is to download the latest `setup.exe` from the [GitHub Releases](https://github.com/Bumblebee621/SwitchLang/releases) page.**
+
+### Running from Source
+
 Run the following commands in your terminal (Command Prompt or PowerShell):
 
 ```bash
