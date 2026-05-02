@@ -24,8 +24,8 @@ def _process_chunk(lines, allowed_chars=None):
     """
     Worker function to process a list of text lines and return n-gram frequencies.
     
-    This function cleans the input text by removing specific formatting marks and 
-    speaker indicators, filters out words containing characters outside the allowed set,
+    This function cleans the input text by removing unicode directional marks,
+    filters out words containing characters outside the allowed set,
     and then extracts bigrams, trigrams, and quadgrams from valid words.
     
     Args:
@@ -45,20 +45,6 @@ def _process_chunk(lines, allowed_chars=None):
         line = line.lower().strip()
         # Remove Right-to-Left and Left-to-Right Marks
         line = line.replace('\u200f', '').replace('\u200e', '')
-        
-        # Remove hyphen or en-dash if at the start of the line (speaker change indicator)
-        if line.startswith('-') or line.startswith('–'):
-            line = line[1:].lstrip()
-            
-        # Remove artifacts like [laughing] or [ in Pidgin ] at the start of the line
-        if line.startswith('['):
-            close_idx = line.find(']')
-            if close_idx != -1:
-                line = line[close_idx + 1:].lstrip()
-                
-        # Check one more time for a dash in case the sequence was "[artifact] - text"
-        if line.startswith('-') or line.startswith('–'):
-            line = line[1:].lstrip()
         
         if not line:
             continue

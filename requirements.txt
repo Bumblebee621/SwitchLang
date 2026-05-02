@@ -5,3 +5,4 @@ PyQt6>=6.6
 pynput>=1.7
 python-dotenv
 requests>=2.31.0
+datasets

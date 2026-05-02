@@ -35,7 +35,7 @@ if sys.stdout.encoding != 'utf-8':
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.engine import EvaluationEngine
-from core.quadgram import load_models
+from core.quadgram import load_models, QuadgramModel
 from core.sensitivity import SensitivityManager
 from core.keymap import shadow
 
@@ -96,8 +96,13 @@ class FNReport:
 class EvaluationHarness:
     """Replays text through the SwitchLang engine to measure accuracy."""
 
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, en_model_path=None, he_model_path=None):
         models = load_models(data_dir)
+        # Allow overriding individual model files
+        if en_model_path:
+            models['en'] = QuadgramModel(en_model_path)
+        if he_model_path:
+            models['he'] = QuadgramModel(he_model_path)
         collisions_path = os.path.join(data_dir, 'collisions.json')
         self.engine = EvaluationEngine(
             models['en'], models['he'],
@@ -454,6 +459,14 @@ def main():
         '--data-dir', default=None,
         help='Path to data/ directory (default: auto-detect).',
     )
+    parser.add_argument(
+        '--en-model', default=None, metavar='PATH',
+        help='Override path to English quadgram JSON (e.g. data/backup_opus/en_quadgrams.json).',
+    )
+    parser.add_argument(
+        '--he-model', default=None, metavar='PATH',
+        help='Override path to Hebrew quadgram JSON (e.g. data/backup_opus/he_quadgrams.json).',
+    )
     args = parser.parse_args()
 
     # ── resolve data dir ──
@@ -487,7 +500,11 @@ def main():
 
     # ── init harness ──
     print(f'Loading models from {args.data_dir} …')
-    harness = EvaluationHarness(args.data_dir)
+    if args.en_model:
+        print(f'  EN model override: {args.en_model}')
+    if args.he_model:
+        print(f'  HE model override: {args.he_model}')
+    harness = EvaluationHarness(args.data_dir, en_model_path=args.en_model, he_model_path=args.he_model)
     print('Models loaded.\n')
 
     # ── run tests ──

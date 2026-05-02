@@ -38,6 +38,7 @@ switchlang.log*
 data/*.txt
 data/*.gz
 data/*.json
+data/backup_opus/
 !data/en_quadgrams.json
 !data/he_quadgrams.json
 !data/so_quadgrams.json
@@ -61,3 +62,4 @@ Thumbs.db
 # testing and optimization
 evaluation/*.txt
 testing quadgram distances/
+quadgram_sampling_experiment/

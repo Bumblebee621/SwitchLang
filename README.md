@@ -6,7 +6,7 @@ SwitchLang runs in the system tray, intercepts keystrokes, and uses an N-gram pr
 
 ## Features
 
-- **High-Density Engine:** Uses a character-level quadgram model trained on 10 million lines of data from OpenSubtitles ([OPUS](http://www.opensubtitles.org/)) and Stack Overflow ([Archive.org](https://archive.org/)) for accurate language detection.
+- **High-Density Engine:** Uses a character-level quadgram model trained on 10 million lines of data from [CulturaX](https://huggingface.co/datasets/uonlp/CulturaX) (a massive cleaned web-crawled dataset) and Stack Overflow ([Archive.org](https://archive.org/)) for accurate language detection.
 - **Context Resumption Events (CRE):** Automatically resets internal buffers and history on specific events, such as pressing `Ctrl + A` or changing window focus, to ensure fresh detection for new words.
 - **Suspension Hotkey:** Support for a user-configurable keybind to temporarily pause auto-switching functionality.
 - **Dynamic Sensitivity:** Thresholds adapt based on idle time, focus changes, and manual layout overrides.
