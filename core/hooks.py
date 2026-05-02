@@ -313,8 +313,8 @@ class HookManager:
                 logger.info('Suspension cancelled by hotkey')
             else:
                 self._suspended_until = time.monotonic() + self._suspend_duration
-                self._clear_buffers()
-                self._clear_history()
+                self._fire_cre('engine_suspend')
+
                 logger.info('Engine suspended for %d seconds', self._suspend_duration)
 
                 if self._suspend_switch_layout:
@@ -329,9 +329,12 @@ class HookManager:
             return True
         return False
 
-    def _set_correcting(self, val):
-        """Internal lock flag setter used by the Switcher thread."""
-        self.is_correcting = val
+    def _fire_cre(self, reason):
+        """Context Resumption Event — reset sensitivity and all buffers."""
+        self.sensitivity.reset(reason=reason)
+        self._clear_buffers()
+        self._clear_history()
+
 
     def _clear_buffers(self):
         """Clear the current word buffers (usually on word completion or CRE)."""
@@ -411,22 +414,19 @@ class HookManager:
 
         if self._ctrl_pressed:
             if vk_code == VK_A:
-                self.sensitivity.reset(reason='ctrl+a')
-                self._clear_buffers()
-                self._clear_history()
+                self._fire_cre('ctrl+a')
+
             return False
 
         if vk_code == VK_TAB:
-            self.sensitivity.reset(reason='tab_key')
-            self._clear_buffers()
-            self._clear_history()
+            self._fire_cre('tab_key')
+
             return False
 
         # Caps Lock toggle: treat as CRE to avoid mixed buffers.
         if vk_code == VK_CAPITAL:
-            self.sensitivity.reset(reason='caps_lock')
-            self._clear_buffers()
-            self._clear_history()
+            self._fire_cre('caps_lock')
+
             return False
 
         # Reset sensitivity timer on every active keystroke
@@ -598,7 +598,8 @@ class HookManager:
         self._clear_history()
 
         # Lock the main hook (synchronously) and spin up the heavy-lifter thread.
-        self._set_correcting(True)
+        self.is_correcting = True
+
         switch_thread = threading.Thread(
             target=self._do_switch,
             args=(buf_active, buf_shadow, target, correction_block, delimiter_char, caps_fix),
@@ -671,7 +672,8 @@ class HookManager:
         except Exception:
             logger.exception('Error in switch thread')
         finally:
-            self._set_correcting(False)
+            self.is_correcting = False
+
 
         if self._on_switch_callback:
             self._on_switch_callback()
@@ -708,8 +710,6 @@ class HookManager:
                         self._ctrl_pressed = True
                     elif vk in (VK_MENU, VK_LMENU, VK_RMENU):
                         self._alt_pressed = True
-                    elif vk in MODIFIER_VKS:
-                        pass
                     else:
                         # Check suspend hotkey before normal processing
                         if self._check_suspend_hotkey(vk):
@@ -775,9 +775,8 @@ class HookManager:
     def _on_mouse_click(self, x, y, button, pressed):
         """Mouse click callback — triggers a Context Resumption Event (CRE)."""
         if pressed and button != pynput_mouse.Button.middle:
-            self.sensitivity.reset(reason='mouse_click')
-            self._clear_buffers()
-            self._clear_history()
+            self._fire_cre('mouse_click')
+
 
     def _poll_foreground_window(self):
         """Worker thread to poll OS state (Layout/Blacklist) every 100ms.
@@ -793,9 +792,8 @@ class HookManager:
                     if new_layout != 'unknown':
                         if new_layout != self._cached_layout:
                             # Manual change detected? Trigger CRE.
-                            self.sensitivity.reset(reason='manual_layout_change')
-                            self._clear_buffers()
-                            self._clear_history()
+                            self._fire_cre('manual_layout_change')
+
                         self._cached_layout = new_layout
 
                 # 2. Update Blacklist and IDE Status
@@ -812,16 +810,14 @@ class HookManager:
                 # 3. Detect Foreground Window changes (Trigger CRE)
                 hwnd = user32.GetForegroundWindow()
                 if self.sensitivity.check_window_change(hwnd):
-                    self.sensitivity.reset(reason='window_change')
-                    self._clear_buffers()
-                    self._clear_history()
+                    self._fire_cre('window_change')
+
 
                 # 4. Check for Idle Timeout (Trigger CRE)
                 if self.enabled and self.sensitivity.check_idle_timeout(self.idle_timeout):
-                    self.sensitivity.reset(reason='idle_timeout')
+                    self._fire_cre('idle_timeout')
                     self.sensitivity.record_keystroke() # Prevent infinite reset loop
-                    self._clear_buffers()
-                    self._clear_history()
+
 
             except Exception:
                 logger.exception('Error in foreground poll')
