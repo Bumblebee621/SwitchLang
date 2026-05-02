@@ -20,6 +20,7 @@ import argparse
 import collections
 import io
 import os
+import re
 import statistics
 import sys
 import time
@@ -246,7 +247,7 @@ class EvaluationHarness:
                     f'Line {line_num}: "{trunc}"\n' + '\n'.join(details)
                 )
 
-            if line_num % 500 == 0:
+            if line_num % 5000 == 0:
                 print(f'  [FP] {line_num}/{len(lines)} lines …', flush=True)
 
         report.elapsed_sec = time.time() - t0
@@ -360,7 +361,7 @@ class EvaluationHarness:
                         f'({latency_chars} chars lost)'
                     )
 
-            if line_num % 500 == 0:
+            if line_num % 5000 == 0:
                 print(f'  [FN] {line_num}/{len(lines)} lines …', flush=True)
 
         report.elapsed_sec = time.time() - t0
@@ -375,13 +376,15 @@ def _pct(num, denom):
     return (num / denom * 100) if denom else 0.0
 
 
-def print_fp_report(report, max_flagged=30):
+def print_fp_report(report, corpus_path, model_path, max_flagged=30):
     print(f'\n{"=" * 65}')
     print(f' FALSE POSITIVE TEST  (valid {report.lang.upper()}, layout={report.lang})')
     print(f'{"=" * 65}')
+    print(f'Corpus:           {corpus_path}')
+    print(f'Model:            {model_path}')
     print(f'Lines tested:     {report.lines_tested}')
     print(f'Words tested:     {report.words_tested}')
-    print(f'False positives:  {report.fp_count}  ({_pct(report.fp_count, report.words_tested):.3f}%)')
+    print(f'False positives:  {report.fp_count}  ({_pct(report.fp_count, report.words_tested):.4f}%)')
     print(f'Recoveries:       {report.recovery_count}')
     print(f'Lines with FP:    {report.lines_with_fp}')
     print(f'Time:             {report.elapsed_sec:.1f}s')
@@ -395,16 +398,18 @@ def print_fp_report(report, max_flagged=30):
             print(f'  … and {remaining} more')
 
 
-def print_fn_report(report, max_flagged=30):
+def print_fn_report(report, corpus_path, model_path, max_flagged=30):
     print(f'\n{"=" * 65}')
     print(f' FALSE NEGATIVE TEST  (inverted {report.lang.upper()}, wrong layout)')
     print(f'{"=" * 65}')
+    print(f'Corpus:             {corpus_path}')
+    print(f'Model:              {model_path}')
     print(f'Lines tested:       {report.lines_tested}')
     print(f'Words tested:       {report.words_tested}')
     sr = _pct(report.lines_switched, report.lines_tested)
-    print(f'Lines switched:     {report.lines_switched}/{report.lines_tested}  ({sr:.1f}%)')
+    print(f'Lines switched:     {report.lines_switched}/{report.lines_tested}  ({sr:.3f}%)')
     fnr = _pct(report.words_not_switched, report.words_tested)
-    print(f'Words not switched: {report.words_not_switched}  ({fnr:.2f}%)')
+    print(f'Words not switched: {report.words_not_switched}  ({fnr:.3f}%)')
 
     if report.latency_values:
         vals = report.latency_values
@@ -444,7 +449,7 @@ def main():
         help='Language of the text file.  Auto-detected from filename if omitted.',
     )
     parser.add_argument(
-        '--max-lines', type=int, default=None,
+        '--max-lines', type=int, default=50_000,
         help='Max non-empty lines to process (default: entire file).',
     )
     parser.add_argument(
@@ -492,11 +497,27 @@ def main():
 
     # ── load text ──
     print(f'Loading text from {args.text_file} …')
+    lines = []
     with open(args.text_file, 'r', encoding='utf-8') as f:
-        lines = [l for l in f if l.strip()]
-    if args.max_lines is not None:
-        lines = lines[:args.max_lines]
-    print(f'Loaded {len(lines)} non-empty lines  (lang={args.lang})')
+        for l in f:
+            l = l.strip()
+            if not l:
+                continue
+                
+            has_hebrew = bool(re.search(r'[\u0590-\u05FF]', l))
+            has_english = bool(re.search(r'[a-zA-Z]', l))
+            has_nikud = bool(re.search(r'[\u0591-\u05C7]', l))
+            
+            if args.lang == 'he' and (not has_hebrew or has_english or has_nikud):
+                continue
+            if args.lang == 'en' and (not has_english or has_hebrew):
+                continue
+                
+            lines.append(l)
+            if args.max_lines is not None and len(lines) >= args.max_lines:
+                break
+                
+    print(f'Loaded {len(lines)} non-empty pure lines (lang={args.lang})')
 
     # ── init harness ──
     print(f'Loading models from {args.data_dir} …')
@@ -508,13 +529,17 @@ def main():
     print('Models loaded.\n')
 
     # ── run tests ──
+    model_override = args.en_model if args.lang == 'en' else args.he_model
+    model_path = model_override if model_override else os.path.join(args.data_dir, f'{args.lang}_quadgrams.json')
+    corpus_path = args.text_file
+
     if args.test in ('fp', 'both'):
         fp = harness.test_false_positives(lines, args.lang, args.baseline_delta)
-        print_fp_report(fp)
+        print_fp_report(fp, corpus_path, model_path)
 
     if args.test in ('fn', 'both'):
         fn = harness.test_false_negatives(lines, args.lang, args.baseline_delta)
-        print_fn_report(fn)
+        print_fn_report(fn, corpus_path, model_path)
 
 
 if __name__ == '__main__':
