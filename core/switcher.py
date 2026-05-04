@@ -393,6 +393,18 @@ def execute_switch(buffer_active, buffer_shadow,
             erase_len, inject_text
         )
 
+    # -------------------------------------------------------------------------
+    # CLEAR FORWARD SELECTION (Autocomplete mitigation)
+    # -------------------------------------------------------------------------
+    # If the user's typing triggered an inline autocomplete (like Chrome's address
+    # bar), the autocompleted text is highlighted as a forward selection.
+    # We must explicitly overwrite it before sending backspaces. We do this by
+    # injecting a "dummy" character from the target layout (so it won't trigger 
+    # a new autocomplete), and then erasing it along with the rest of the word.
+    dummy_char = 'ש' if target_layout == 'he' else 'q'
+    send_string_as_keys(dummy_char, get_current_layout())
+    erase_len += 1
+
     send_backspaces(erase_len)
     time.sleep(_CORRECTION_STEP_DELAY)
 
