@@ -394,12 +394,7 @@ class HookManager:
         # 1. While a correction switch is happening, intercept and queue all typing.
         if self.is_correcting:
             caps_lock = _is_caps_lock_on()
-            if vk_code in DELIMITER_VKS:
-                self.pending_queue.append((vk_code, self._shift_pressed, caps_lock))
-            else:
-                en_ch, he_ch = get_both_chars(vk_code, self._shift_pressed, caps_lock)
-                if en_ch is not None:
-                    self.pending_queue.append((vk_code, self._shift_pressed, caps_lock))
+            self.pending_queue.append((vk_code, self._shift_pressed, caps_lock))
             return True # Block keys so they don't interleave with correction injection.
 
         # 2. Skip logic if global disable, suspension, blacklist, or modifier combos (Ctrl+C)
@@ -637,6 +632,7 @@ class HookManager:
             # This guarantees no keys are lost (they're all either drained
             # here or will arrive after is_correcting is False and go through
             # normal _handle_keypress).
+            from core.switcher import send_string_as_keys, send_vk_key_with_modifiers
             text_to_inject = ""
             consumed_items = []
             while self.pending_queue:
@@ -647,9 +643,15 @@ class HookManager:
                 ch = vk_to_char(q_vk, q_shift, layout=target, caps_lock=q_caps)
                 if ch:
                     text_to_inject += ch
+                else:
+                    # Flush accumulated text first
+                    if text_to_inject:
+                        send_string_as_keys(text_to_inject, target)
+                        text_to_inject = ""
+                    # Replay non-printable keys using explicit VK event
+                    send_vk_key_with_modifiers(q_vk, shift=q_shift)
 
             if text_to_inject:
-                from core.switcher import send_string_as_keys
                 send_string_as_keys(text_to_inject, target)
 
             # Integrate pending characters into the buffers so the engine
@@ -667,6 +669,16 @@ class HookManager:
                     else:
                         self.buffer_active += he_ch
                         self.buffer_shadow += en_ch
+                else:
+                    # Non-printable keys handling
+                    if q_vk == VK_BACK:
+                        if self.buffer_active:
+                            self.buffer_active = self.buffer_active[:-1]
+                            self.buffer_shadow = self.buffer_shadow[:-1]
+                    else:
+                        # Other control keys like Arrows suggest cursor movement.
+                        # It is safest to assume context is lost, so clear buffers.
+                        self._clear_buffers()
 
             self.sensitivity.reset(reason='layout_switch')
         except Exception:

@@ -155,6 +155,22 @@ def send_vk_key(vk):
     _send_inputs(inputs)
 
 
+def send_vk_key_with_modifiers(vk, shift=False):
+    """Send a single virtual key press with optional modifiers."""
+    inputs = []
+    if shift:
+        inputs.append(_make_key_input(vk=VK_SHIFT))
+    
+    inputs.append(_make_key_input(vk=vk))
+    inputs.append(_make_key_input(vk=vk, flags=KEYEVENTF_KEYUP))
+    
+    if shift:
+        inputs.append(_make_key_input(vk=VK_SHIFT, flags=KEYEVENTF_KEYUP))
+        
+    if inputs:
+        _send_inputs(inputs)
+
+
 def send_string_as_keys(text, layout):
     """Send text as real VK key events through the active OS keyboard layout.
 
