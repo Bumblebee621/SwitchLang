@@ -81,6 +81,24 @@ VK_TO_CHARS_SHIFT = {
     0xDD: ('}', '}'), 0xDE: ('"', '"'),
 }
 
+# Reverse mappings: character → (vk_code, needs_shift)
+# Used by the switcher to send real VK key events instead of KEYEVENTF_UNICODE.
+def _build_char_to_vk():
+    """Build reverse char→(vk, shifted) tables for both layouts."""
+    en_map = {' ': (0x20, False), '\n': (0x0D, False), '\t': (0x09, False)}
+    he_map = {' ': (0x20, False), '\n': (0x0D, False), '\t': (0x09, False)}
+    for vk, (en, he) in VK_TO_CHARS.items():
+        en_map[en] = (vk, False)
+        he_map[he] = (vk, False)
+    for vk, (en, he) in VK_TO_CHARS_SHIFT.items():
+        if en not in en_map:
+            en_map[en] = (vk, True)
+        if he not in he_map:
+            he_map[he] = (vk, True)
+    return en_map, he_map
+
+CHAR_TO_VK_EN, CHAR_TO_VK_HE = _build_char_to_vk()
+
 
 def shadow(text, direction='en_to_he'):
     """Convert text from one layout to the other, character by character.

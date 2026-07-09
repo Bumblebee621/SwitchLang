@@ -82,6 +82,31 @@ class PlatformBackend(ABC):
             text: The string to inject.
         """
 
+    def send_text(self, text: str, layout: str) -> None:
+        """Inject text into the focused application.
+
+        Backends may use the active layout to send real key events (which
+        some apps handle more reliably than Unicode injection). The default
+        implementation falls back to layout-independent Unicode injection.
+
+        Args:
+            text: The string to inject.
+            layout: 'en' or 'he' — the OS layout active at injection time.
+        """
+        self.send_unicode_string(text)
+
+    def send_key_with_modifiers(self, keycode: int, shift: bool = False) -> None:
+        """Send a single key press, optionally wrapped in a Shift modifier.
+
+        Used to replay non-printable keys captured while a correction was
+        in progress. The default implementation ignores the modifier.
+
+        Args:
+            keycode: Platform-normalised virtual key code.
+            shift: Whether to hold Shift around the key press.
+        """
+        self.send_key(keycode)
+
     @abstractmethod
     def send_key(self, keycode: int) -> None:
         """Send a single key press (down + up) using the platform key code.

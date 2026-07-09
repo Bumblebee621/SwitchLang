@@ -32,7 +32,7 @@ def run_command(command, description, cwd=None):
 def create_installer():
     # 0. Sync version from core/version.py to setup.iss
     if not run_command(
-        f'python scripts/sync_version.py',
+        f'"{sys.executable}" scripts/sync_version.py',
         'Synchronizing version',
         cwd=PROJECT_ROOT
     ):
@@ -41,7 +41,7 @@ def create_installer():
 
     # 1. Run build.py to create the executable
     if not run_command(
-        'python build.py',
+        f'"{sys.executable}" build.py',
         'Building executable with PyInstaller',
         cwd=PROJECT_ROOT
     ):

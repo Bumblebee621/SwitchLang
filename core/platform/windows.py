@@ -401,6 +401,54 @@ class WindowsBackend(PlatformBackend):
         if inputs:
             _send_inputs(inputs)
 
+    def send_text(self, text, layout):
+        """Send text as real VK key events through the active OS keyboard layout.
+
+        Unlike KEYEVENTF_UNICODE (which relies on VK_PACKET → TranslateMessage),
+        this sends real keyboard events through the normal OS input pipeline.
+        Modern WinUI/XAML apps (e.g. Windows 11 Notepad) handle these reliably,
+        whereas they can garble batched KEYEVENTF_UNICODE events.
+
+        Falls back to KEYEVENTF_UNICODE for characters not in the VK mapping.
+        """
+        from core.keymap import CHAR_TO_VK_EN, CHAR_TO_VK_HE
+        table = CHAR_TO_VK_EN if layout == 'en' else CHAR_TO_VK_HE
+
+        for ch in text:
+            entry = table.get(ch)
+            if entry:
+                vk, shifted = entry
+                inputs = []
+                if shifted:
+                    inputs.append(_make_key_input(vk=VK_SHIFT))
+                inputs.append(_make_key_input(vk=vk))
+                inputs.append(_make_key_input(vk=vk, flags=KEYEVENTF_KEYUP))
+                if shifted:
+                    inputs.append(_make_key_input(vk=VK_SHIFT, flags=KEYEVENTF_KEYUP))
+                _send_inputs(inputs)
+            else:
+                # Fallback: use Unicode for chars not in VK mapping
+                code = ord(ch)
+                pair = [
+                    _make_key_input(scan=code, flags=KEYEVENTF_UNICODE),
+                    _make_key_input(scan=code, flags=KEYEVENTF_UNICODE | KEYEVENTF_KEYUP),
+                ]
+                _send_inputs(pair)
+
+    def send_key_with_modifiers(self, keycode, shift=False):
+        inputs = []
+        if shift:
+            inputs.append(_make_key_input(vk=VK_SHIFT))
+
+        inputs.append(_make_key_input(vk=keycode))
+        inputs.append(_make_key_input(vk=keycode, flags=KEYEVENTF_KEYUP))
+
+        if shift:
+            inputs.append(_make_key_input(vk=VK_SHIFT, flags=KEYEVENTF_KEYUP))
+
+        if inputs:
+            _send_inputs(inputs)
+
     def replace_text(self, erase_count, text):
         self.send_backspaces(erase_count)
         self.send_unicode_string(text)

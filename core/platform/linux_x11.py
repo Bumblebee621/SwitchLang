@@ -432,6 +432,26 @@ class LinuxX11Backend(PlatformBackend):
         self._uinput_device.write(e.EV_KEY, evdev_code, 0)
         self._uinput_device.syn()
 
+    def send_key_with_modifiers(self, keycode, shift=False):
+        """Send a key press via uinput, optionally wrapped in Shift."""
+        from evdev import ecodes as e
+
+        evdev_code = _VK_TO_EVDEV.get(keycode)
+        if evdev_code is None:
+            logger.warning('No evdev mapping for VK 0x%02X', keycode)
+            return
+
+        if shift:
+            self._uinput_device.write(e.EV_KEY, e.KEY_LEFTSHIFT, 1)
+            self._uinput_device.syn()
+        self._uinput_device.write(e.EV_KEY, evdev_code, 1)
+        self._uinput_device.syn()
+        self._uinput_device.write(e.EV_KEY, evdev_code, 0)
+        self._uinput_device.syn()
+        if shift:
+            self._uinput_device.write(e.EV_KEY, e.KEY_LEFTSHIFT, 0)
+            self._uinput_device.syn()
+
     def toggle_caps_lock(self):
         from evdev import ecodes as e
 

@@ -253,3 +253,42 @@ QToolTip {
     border-radius: 4px;
     padding: 4px 8px;
 }
+
+/* Scrollbar */
+QScrollBar:vertical {
+    background-color: #313244;
+    width: 8px;
+}
+
+QScrollBar::handle:vertical {
+    background-color: #312e4b;
+    min-height: 24px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background-color: #4d456f;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+QScrollBar:horizontal {
+    background-color: #313244;
+    height: 8px;
+}
+
+QScrollBar::handle:horizontal {
+    background-color: #cba6f7;
+    min-width: 24px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background-color: #d5b8fa;
+}
+
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    width: 0px;
+}
