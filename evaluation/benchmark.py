@@ -1,5 +1,5 @@
 """
-test_evaluation.py — SwitchLang evaluation test harness.
+benchmark.py — SwitchLang evaluation test harness.
 
 Measures false positive rate, false negative rate, and detection latency
 by replaying text files through the evaluation engine — no OS hooks needed.
@@ -9,11 +9,12 @@ delimiter evaluation, sensitivity decay, collision blacklist, and retroactive
 lookback via history deque / correction blocks.
 
 Usage:
-    python test_evaluation.py                             # en_corpus.txt, all lines
-    python test_evaluation.py --max-lines 1000            # first 1000 lines
-    python test_evaluation.py data/he_corpus.txt          # Hebrew corpus
-    python test_evaluation.py myfile.txt --lang en        # explicit language
-    python test_evaluation.py --test fp                   # only false-positive test
+    python benchmark.py                                   # en_corpus.txt, all lines
+    python benchmark.py --max-lines 1000                  # first 1000 lines
+    python benchmark.py data/he_corpus.txt                # Hebrew corpus
+    python benchmark.py myfile.txt --lang en              # explicit language
+    python benchmark.py --test fp                         # only false-positive test
+    python benchmark.py --holdout-frac 0.1                # evaluate on held-out tail
 """
 
 import argparse
@@ -75,6 +76,10 @@ class FPReport:
     flagged_lines: list = field(default_factory=list)
     elapsed_sec: float = 0.0
 
+    @property
+    def fp_per_1k(self):
+        return (self.fp_count / self.words_tested * 1000) if self.words_tested else 0.0
+
 
 @dataclass
 class FNReport:
@@ -89,6 +94,10 @@ class FNReport:
     flagged_lines: list = field(default_factory=list)
     elapsed_sec: float = 0.0
 
+    @property
+    def fn_per_1k(self):
+        return (self.words_not_switched / self.words_tested * 1000) if self.words_tested else 0.0
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # EVALUATION HARNESS
@@ -97,8 +106,9 @@ class FNReport:
 class EvaluationHarness:
     """Replays text through the SwitchLang engine to measure accuracy."""
 
-    def __init__(self, data_dir, en_model_path=None, he_model_path=None):
-        models = load_models(data_dir)
+    def __init__(self, data_dir, en_model_path=None, he_model_path=None,
+                 mode='standard'):
+        models = load_models(data_dir, load_so=(mode == 'technical'))
         # Allow overriding individual model files
         if en_model_path:
             models['en'] = QuadgramModel(en_model_path)
@@ -109,6 +119,8 @@ class EvaluationHarness:
             models['en'], models['he'],
             collisions_path=collisions_path,
             enable_logging=False,
+            en_so_model=models.get('so'),
+            model_mode=mode,
         )
 
     # ------------------------------------------------------------------
@@ -372,19 +384,49 @@ class EvaluationHarness:
 # REPORT PRINTING
 # ═══════════════════════════════════════════════════════════════════════════
 
+def load_corpus_lines(path, lang, cap=None):
+    """Read *path*, keeping non-empty lines written purely in *lang*'s script.
+
+    Mixed-script lines are excluded: a real layout switch fires a CRE, so each
+    script run is an independent segment rather than one continuous context.
+    """
+    lines = []
+    with open(path, 'r', encoding='utf-8') as f:
+        for l in f:
+            l = l.strip()
+            if not l:
+                continue
+
+            has_hebrew = bool(re.search(r'[\u0590-\u05FF]', l))
+            has_english = bool(re.search(r'[a-zA-Z]', l))
+            has_nikud = bool(re.search(r'[\u0591-\u05C7]', l))
+
+            if lang == 'he' and (not has_hebrew or has_english or has_nikud):
+                continue
+            if lang == 'en' and (not has_english or has_hebrew):
+                continue
+
+            lines.append(l)
+            if cap is not None and len(lines) >= cap:
+                break
+    return lines
+
+
 def _pct(num, denom):
     return (num / denom * 100) if denom else 0.0
 
 
-def print_fp_report(report, corpus_path, model_path, max_flagged=30):
+def print_fp_report(report, corpus_path, model_path, provenance='', max_flagged=30):
     print(f'\n{"=" * 65}')
     print(f' FALSE POSITIVE TEST  (valid {report.lang.upper()}, layout={report.lang})')
     print(f'{"=" * 65}')
     print(f'Corpus:           {corpus_path}')
+    print(f'Split:            {provenance}')
     print(f'Model:            {model_path}')
     print(f'Lines tested:     {report.lines_tested}')
     print(f'Words tested:     {report.words_tested}')
     print(f'False positives:  {report.fp_count}  ({_pct(report.fp_count, report.words_tested):.4f}%)')
+    print(f'FP per 1k words:  {report.fp_per_1k:.3f}')
     print(f'Recoveries:       {report.recovery_count}')
     print(f'Lines with FP:    {report.lines_with_fp}')
     print(f'Time:             {report.elapsed_sec:.1f}s')
@@ -398,11 +440,12 @@ def print_fp_report(report, corpus_path, model_path, max_flagged=30):
             print(f'  … and {remaining} more')
 
 
-def print_fn_report(report, corpus_path, model_path, max_flagged=30):
+def print_fn_report(report, corpus_path, model_path, provenance='', max_flagged=30):
     print(f'\n{"=" * 65}')
     print(f' FALSE NEGATIVE TEST  (inverted {report.lang.upper()}, wrong layout)')
     print(f'{"=" * 65}')
     print(f'Corpus:             {corpus_path}')
+    print(f'Split:              {provenance}')
     print(f'Model:              {model_path}')
     print(f'Lines tested:       {report.lines_tested}')
     print(f'Words tested:       {report.words_tested}')
@@ -410,6 +453,7 @@ def print_fn_report(report, corpus_path, model_path, max_flagged=30):
     print(f'Lines switched:     {report.lines_switched}/{report.lines_tested}  ({sr:.3f}%)')
     fnr = _pct(report.words_not_switched, report.words_tested)
     print(f'Words not switched: {report.words_not_switched}  ({fnr:.3f}%)')
+    print(f'FN per 1k words:    {report.fn_per_1k:.3f}')
 
     if report.latency_values:
         vals = report.latency_values
@@ -472,6 +516,15 @@ def main():
         '--he-model', default=None, metavar='PATH',
         help='Override path to Hebrew quadgram JSON (e.g. data/backup_opus/he_quadgrams.json).',
     )
+    parser.add_argument(
+        '--holdout-frac', type=float, default=None, metavar='F',
+        help='Evaluate only on the last F fraction of eligible lines (e.g. 0.1). '
+             'The model must have been built without them, or this proves nothing.',
+    )
+    parser.add_argument(
+        '--mode', choices=['standard', 'technical'], default='standard',
+        help='Model mode (default: standard).  technical also scores against so_quadgrams.json.',
+    )
     args = parser.parse_args()
 
     # ── resolve data dir ──
@@ -497,27 +550,23 @@ def main():
 
     # ── load text ──
     print(f'Loading text from {args.text_file} …')
-    lines = []
-    with open(args.text_file, 'r', encoding='utf-8') as f:
-        for l in f:
-            l = l.strip()
-            if not l:
-                continue
-                
-            has_hebrew = bool(re.search(r'[\u0590-\u05FF]', l))
-            has_english = bool(re.search(r'[a-zA-Z]', l))
-            has_nikud = bool(re.search(r'[\u0591-\u05C7]', l))
-            
-            if args.lang == 'he' and (not has_hebrew or has_english or has_nikud):
-                continue
-            if args.lang == 'en' and (not has_english or has_hebrew):
-                continue
-                
-            lines.append(l)
-            if args.max_lines is not None and len(lines) >= args.max_lines:
-                break
-                
+    # A holdout needs the whole file scanned before the tail can be sliced off.
+    cap = None if args.holdout_frac else args.max_lines
+    lines = load_corpus_lines(args.text_file, args.lang, cap)
+
+    eligible = len(lines)
+    if args.holdout_frac:
+        split_at = int(eligible * (1.0 - args.holdout_frac))
+        lines = lines[split_at:]
+        if args.max_lines is not None:
+            lines = lines[:args.max_lines]
+        provenance = (f'held out last {args.holdout_frac:.0%} of {eligible:,} '
+                      f'eligible lines (from index {split_at:,})')
+    else:
+        provenance = 'NO HOLDOUT — results may be inflated by train/test overlap'
+
     print(f'Loaded {len(lines)} non-empty pure lines (lang={args.lang})')
+    print(f'Split: {provenance}')
 
     # ── init harness ──
     print(f'Loading models from {args.data_dir} …')
@@ -525,8 +574,9 @@ def main():
         print(f'  EN model override: {args.en_model}')
     if args.he_model:
         print(f'  HE model override: {args.he_model}')
-    harness = EvaluationHarness(args.data_dir, en_model_path=args.en_model, he_model_path=args.he_model)
-    print('Models loaded.\n')
+    harness = EvaluationHarness(args.data_dir, en_model_path=args.en_model,
+                                he_model_path=args.he_model, mode=args.mode)
+    print(f'Models loaded (mode={args.mode}).\n')
 
     # ── run tests ──
     model_override = args.en_model if args.lang == 'en' else args.he_model
@@ -535,11 +585,11 @@ def main():
 
     if args.test in ('fp', 'both'):
         fp = harness.test_false_positives(lines, args.lang, args.baseline_delta)
-        print_fp_report(fp, corpus_path, model_path)
+        print_fp_report(fp, corpus_path, model_path, provenance)
 
     if args.test in ('fn', 'both'):
         fn = harness.test_false_negatives(lines, args.lang, args.baseline_delta)
-        print_fn_report(fn, corpus_path, model_path)
+        print_fn_report(fn, corpus_path, model_path, provenance)
 
 
 if __name__ == '__main__':
