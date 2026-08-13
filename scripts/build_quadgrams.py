@@ -13,12 +13,15 @@ import logging
 
 # Ensure we can import download_corpora if needed
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-import download_corpora
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s]: %(message)s')
 logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 100_000  # Lines per process
+
+# Quadgrams below this count are ~50% of distinct keys but <0.1% of token mass.
+# TODO: unvalidated — sweep 2/3/5 against the benchmark.
+MIN_QUADGRAM_COUNT = 3
 
 def _process_chunk(lines, allowed_chars=None):
     """
@@ -87,19 +90,21 @@ def _process_chunk(lines, allowed_chars=None):
 
     return quadgram_counts, trigram_counts, bigram_counts, chars
 
-def build_quadgrams_from_file_parallel(file_path, allowed_chars=None):
+def build_quadgrams_from_lines(lines, allowed_chars=None, min_count=MIN_QUADGRAM_COUNT):
     """
-    Builds n-gram models via parallel processing from a large text file.
-    
-    Reads the file iteratively, groups lines into chunks, and processes them
-    concurrently using a ProcessPoolExecutor to maximize CPU utilization.
-    
+    Builds n-gram models via parallel processing from an iterable of lines.
+
+    Groups lines into chunks and processes them concurrently using a
+    ProcessPoolExecutor to maximize CPU utilization.
+
     Args:
-        file_path (str): The path to the text corpus file.
+        lines (iterable[str]): The text lines to process.
         allowed_chars (set, optional): Set of allowed characters for filtering words.
-        
+        min_count (int): Quadgrams at or below this count are dropped.
+            Pass 0 to keep the full tail (used by the k-fold harness).
+
     Returns:
-        dict: A dictionary containing the aggregated 'quadgram_counts', 
+        dict: A dictionary containing the aggregated 'quadgram_counts',
               'trigram_counts', 'bigram_counts', and the resulting 'vocab_size'.
     """
     total_quads = Counter()
@@ -110,43 +115,56 @@ def build_quadgrams_from_file_parallel(file_path, allowed_chars=None):
     num_workers = os.cpu_count() or 4
     logger.info(f"Building models using {num_workers} processes...")
 
-    with open(file_path, 'r', encoding='utf-8') as f:
-        with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            futures = []
-            chunk = []
-            
-            # Submit chunks to the pool
-            for line in f:
-                chunk.append(line)
-                if len(chunk) >= CHUNK_SIZE:
-                    futures.append(executor.submit(_process_chunk, chunk, allowed_chars))
-                    chunk = []
-            
-            if chunk:
-                futures.append(executor.submit(_process_chunk, chunk, allowed_chars))
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        futures = []
+        chunk = []
 
-            # Collect and merge results as they become available for better throughput
-            total_chunks = len(futures)
-            for i, future in enumerate(as_completed(futures)):
-                try:
-                    quads, tris, bis, chars = future.result()
-                    total_quads.update(quads)
-                    total_tris.update(tris)
-                    total_bis.update(bis)
-                    total_chars.update(chars)
-                    
-                    if (i + 1) % 5 == 0 or (i + 1) == total_chunks:
-                        print(f"\r  Progress: {i + 1}/{total_chunks} chunks merged...", end="", flush=True)
-                except Exception as e:
-                    logger.error(f"Error processing chunk: {e}")
-            print()
+        # Submit chunks to the pool
+        for line in lines:
+            chunk.append(line)
+            if len(chunk) >= CHUNK_SIZE:
+                futures.append(executor.submit(_process_chunk, chunk, allowed_chars))
+                chunk = []
+
+        if chunk:
+            futures.append(executor.submit(_process_chunk, chunk, allowed_chars))
+
+        # Collect and merge results as they become available for better throughput
+        total_chunks = len(futures)
+        for i, future in enumerate(as_completed(futures)):
+            try:
+                quads, tris, bis, chars = future.result()
+                total_quads.update(quads)
+                total_tris.update(tris)
+                total_bis.update(bis)
+                total_chars.update(chars)
+
+                if (i + 1) % 5 == 0 or (i + 1) == total_chunks:
+                    print(f"\r  Progress: {i + 1}/{total_chunks} chunks merged...", end="", flush=True)
+            except Exception as e:
+                logger.error(f"Error processing chunk: {e}")
+        print()
+
+    # Must run after the merge: a quadgram seen once per chunk still adds up.
+    # Trigrams and bigrams are left intact — they are the denominators.
+    pruned = {k: c for k, c in total_quads.items() if c > min_count}
+    if min_count:
+        logger.info(f"Pruned quadgrams at count<={min_count}: "
+                    f"{len(total_quads):,} -> {len(pruned):,} keys")
 
     return {
-        'quadgram_counts': dict(total_quads),
+        'quadgram_counts': pruned,
         'trigram_counts': dict(total_tris),
         'bigram_counts': dict(total_bis),
         'vocab_size': len(total_chars) + 1  # +1 for space
     }
+
+
+def build_quadgrams_from_file_parallel(file_path, allowed_chars=None,
+                                       min_count=MIN_QUADGRAM_COUNT):
+    """Build n-gram models from a text corpus file.  See build_quadgrams_from_lines."""
+    with open(file_path, 'r', encoding='utf-8') as f:
+        return build_quadgrams_from_lines(f, allowed_chars, min_count)
 
 # Allowed character sets for each language to ensure model purity.
 # We include standard English/Hebrew letters and common punctuation.
@@ -173,6 +191,7 @@ def main():
     if not os.path.exists(en_txt_path) or not os.path.exists(he_txt_path):
         logger.error("Corpora text files not found!")
         logger.info("Downloading corpora...")
+        import download_corpora  # imports `datasets`, only needed for a download
         download_corpora.main()
 
     start_time = time.time()
