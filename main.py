@@ -130,7 +130,7 @@ def load_config():
             return json.load(f)
     return {
         'enabled': True,
-        'baseline_delta': 2.0,
+        'baseline_delta': 4.0,
         'sensitivity_alpha': 0.3,
         'idle_timeout_seconds': 5.0,
         'debug_mode': False,
@@ -189,7 +189,7 @@ def on_settings_changed(config_data, hook_manager, sensitivity, engine):
     hook_manager.set_enabled(config_data.get('enabled', True))
     hook_manager.set_debug_mode(debug)
     sensitivity.update_config(
-        baseline_delta=config_data.get('baseline_delta', 2.0),
+        baseline_delta=config_data.get('baseline_delta', 4.0),
         alpha=config_data.get('sensitivity_alpha', 0.3)
     )
     hook_manager.idle_timeout = config_data.get(
@@ -248,7 +248,7 @@ def main():
     )
 
     sensitivity = SensitivityManager(
-        baseline_delta=config.get('baseline_delta', 2.0),
+        baseline_delta=config.get('baseline_delta', 4.0),
         alpha=config.get('sensitivity_alpha', 0.3)
     )
 

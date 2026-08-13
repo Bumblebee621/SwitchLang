@@ -616,7 +616,7 @@ class SettingsWindow(QMainWindow):
         self.enable_check.setChecked(data.get('enabled', True))
         self._update_status_label(self.enable_check.isChecked())
         self.debug_check.setChecked(data.get('debug_mode', False))
-        delta = data.get('baseline_delta', 2.0)
+        delta = data.get('baseline_delta', 4.0)
         self.sensitivity_slider.setValue(int(delta * 10))
 
         # Model Mode
