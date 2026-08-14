@@ -39,7 +39,7 @@ data/*.txt
 data/*.gz
 data/*.json
 data/backup_opus/
-data/kfold_cache/
+data/fold_counts/
 !data/en_quadgrams.json
 !data/he_quadgrams.json
 !data/so_quadgrams.json

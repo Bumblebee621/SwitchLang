@@ -1,5 +1,5 @@
 """
-kfold.py — K-fold cross-validated comparison of quadgram model variants.
+compare_variants.py — leakage-free comparison of quadgram model variants.
 
 Each fold's models are built from the other K-1 folds and evaluated on the
 held-out fold, so a variant carrying more parameters cannot win by memorising
@@ -10,9 +10,9 @@ fold-to-fold spread is often larger than the effect under test, and only the
 paired differences separate a real improvement from that noise.
 
 Usage:
-    python evaluation/kfold.py                              # all variants, K=5
-    python evaluation/kfold.py --k 5 --variants unpruned,prune3
-    python evaluation/kfold.py --max-lines 200000           # quick smoke run
+    python evaluation/compare_variants.py                   # all variants, K=5
+    python evaluation/compare_variants.py --variants unpruned,prune3
+    python evaluation/compare_variants.py --max-lines 200000  # quick smoke run
 """
 
 import argparse
@@ -192,8 +192,8 @@ def main():
                         help='Directory holding the reference models and collisions.json.')
     parser.add_argument('--corpus-dir', default=None,
                         help='Directory holding {lang}_corpus.txt (default: --data-dir).')
-    parser.add_argument('--cache-dir', default=os.path.join(default_data, 'kfold_cache'),
-                        help='Where per-fold models are cached between runs.')
+    parser.add_argument('--cache-dir', default=os.path.join(default_data, 'fold_counts'),
+                        help='Where per-fold counts are cached between runs.')
     parser.add_argument('--variants', default=','.join(VARIANTS),
                         help=f'Comma-separated. Available: {",".join(VARIANTS)}')
     parser.add_argument('--baseline-variant', default='unpruned',

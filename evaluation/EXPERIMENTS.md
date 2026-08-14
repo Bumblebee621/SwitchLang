@@ -3,7 +3,7 @@
 Three candidate changes to the scoring model, none of them implemented. They are recorded here with the
 measurements that motivated them so the work can be resumed cold.
 
-Run every comparison through `evaluation/kfold.py` — a variant with more parameters will fit the training
+Run every comparison through `evaluation/compare_variants.py` — a variant with more parameters will fit the training
 corpus better whether or not it generalises, so single-split numbers cannot referee between these.
 
 ## Measurements on the shipped models

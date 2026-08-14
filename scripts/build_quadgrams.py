@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 100_000  # Lines per process
 
-# Drops 43% of keys for +3.5% false positives (5-fold, evaluation/kfold.py).
+# Drops 43% of keys for +3.5% false positives (evaluation/compare_variants.py).
 # The rare tail grows with the corpus, so revisit this if the corpus does.
 MIN_QUADGRAM_COUNT = 2
 
