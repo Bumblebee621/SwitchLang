@@ -15,9 +15,11 @@ Usage:
     python benchmark.py myfile.txt --lang en              # explicit language
     python benchmark.py --test fp                         # only false-positive test
     python benchmark.py --holdout-frac 0.1                # evaluate on held-out tail
+    python benchmark.py --jobs 1                          # serial (default: all cores)
 """
 
 import argparse
+import atexit
 import collections
 import io
 import os
@@ -25,7 +27,8 @@ import re
 import statistics
 import sys
 import time
-from dataclasses import dataclass, field
+from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass, field, fields
 
 # Force UTF-8 output on Windows (cp1252 can't encode Hebrew characters)
 if sys.stdout.encoding != 'utf-8':
@@ -198,13 +201,14 @@ class EvaluationHarness:
     # FALSE-POSITIVE TEST
     # ------------------------------------------------------------------
 
-    def test_false_positives(self, lines, text_lang, baseline_delta=4.0):
+    def test_false_positives(self, lines, text_lang, baseline_delta=4.0,
+                             line_offset=0, progress=True):
         """Feed *valid* text on the *correct* layout.  Any switch = FP."""
         report = FPReport(lang=text_lang)
         t0 = time.time()
         correct = text_lang
 
-        for line_num, line in enumerate(lines, 1):
+        for line_num, line in enumerate(lines, line_offset + 1):
             words = line.strip().split()
             if not words:
                 continue
@@ -259,7 +263,7 @@ class EvaluationHarness:
                     f'Line {line_num}: "{trunc}"\n' + '\n'.join(details)
                 )
 
-            if line_num % 5000 == 0:
+            if progress and line_num % 5000 == 0:
                 print(f'  [FP] {line_num}/{len(lines)} lines …', flush=True)
 
         report.elapsed_sec = time.time() - t0
@@ -269,7 +273,8 @@ class EvaluationHarness:
     # FALSE-NEGATIVE TEST
     # ------------------------------------------------------------------
 
-    def test_false_negatives(self, lines, text_lang, baseline_delta=4.0):
+    def test_false_negatives(self, lines, text_lang, baseline_delta=4.0,
+                             line_offset=0, progress=True):
         """Feed *inverted* text (wrong layout).  Failure to switch = FN.
 
         Latency = total chars typed on the wrong layout from the start of
@@ -281,7 +286,7 @@ class EvaluationHarness:
         correct = text_lang
         wrong = self._other(text_lang)
 
-        for line_num, line in enumerate(lines, 1):
+        for line_num, line in enumerate(lines, line_offset + 1):
             words = line.strip().split()
             if not words:
                 continue
@@ -373,11 +378,97 @@ class EvaluationHarness:
                         f'({latency_chars} chars lost)'
                     )
 
-            if line_num % 5000 == 0:
+            if progress and line_num % 5000 == 0:
                 print(f'  [FN] {line_num}/{len(lines)} lines …', flush=True)
 
         report.elapsed_sec = time.time() - t0
         return report
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PARALLEL EXECUTION
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Every line resets layout, sensitivity and history, so lines are independent
+# and splitting them across processes reproduces the serial result exactly.
+
+# Size 1: a variant is scored FP then FN, so the second call reuses the models
+# while memory stays at one model set per worker rather than one per variant.
+_worker_models = (None, None)
+
+
+def _run_chunk(job):
+    global _worker_models
+    test, offset, lines, lang, delta, key = job
+    if _worker_models[0] != key:
+        _worker_models = (key, EvaluationHarness(*key))
+    harness = _worker_models[1]
+    method = (harness.test_false_positives if test == 'fp'
+              else harness.test_false_negatives)
+    return method(lines, lang, delta, line_offset=offset, progress=False)
+
+
+def _merge_reports(reports):
+    """Sum counters and concatenate lists across chunk reports."""
+    merged = reports[0]
+    for report in reports[1:]:
+        for f in fields(merged):
+            value = getattr(report, f.name)
+            if isinstance(value, bool) or f.name == 'lang':
+                continue
+            if isinstance(value, (int, float)):
+                setattr(merged, f.name, getattr(merged, f.name) + value)
+            elif isinstance(value, list):
+                getattr(merged, f.name).extend(value)
+    return merged
+
+
+_pool = None
+_pool_jobs = None
+
+
+def _get_pool(jobs):
+    """One pool for the whole process — respawning it per call costs seconds."""
+    global _pool, _pool_jobs
+    if _pool is None or _pool_jobs != jobs:
+        shutdown_pool()
+        _pool = ProcessPoolExecutor(max_workers=jobs)
+        _pool_jobs = jobs
+    return _pool
+
+
+def shutdown_pool():
+    global _pool, _pool_jobs
+    if _pool is not None:
+        _pool.shutdown()
+        _pool, _pool_jobs = None, None
+
+
+atexit.register(shutdown_pool)
+
+
+def run_test(test, lines, lang, delta, data_dir, en_model_path=None,
+             he_model_path=None, mode='standard', jobs=1):
+    """Run the 'fp' or 'fn' test over *lines*, optionally across processes."""
+    key = (data_dir, en_model_path, he_model_path, mode)
+
+    if jobs <= 1:
+        harness = EvaluationHarness(*key)
+        method = (harness.test_false_positives if test == 'fp'
+                  else harness.test_false_negatives)
+        return method(lines, lang, delta)
+
+    # Several chunks per worker keeps them busy when line lengths vary.
+    n_chunks = jobs * 4
+    size = max(1, -(-len(lines) // n_chunks))
+    chunks = [(test, i, lines[i:i + size], lang, delta, key)
+              for i in range(0, len(lines), size)]
+
+    t0 = time.time()
+    reports = list(_get_pool(jobs).map(_run_chunk, chunks))
+    merged = _merge_reports(reports)
+    merged.elapsed_sec = time.time() - t0
+    return merged
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -525,6 +616,10 @@ def main():
         '--mode', choices=['standard', 'technical'], default='standard',
         help='Model mode (default: standard).  technical also scores against so_quadgrams.json.',
     )
+    parser.add_argument(
+        '-j', '--jobs', type=int, default=os.cpu_count() or 1, metavar='N',
+        help='Worker processes for scoring (default: all cores).  1 disables.',
+    )
     args = parser.parse_args()
 
     # ── resolve data dir ──
@@ -568,27 +663,26 @@ def main():
     print(f'Loaded {len(lines)} non-empty pure lines (lang={args.lang})')
     print(f'Split: {provenance}')
 
-    # ── init harness ──
-    print(f'Loading models from {args.data_dir} …')
     if args.en_model:
         print(f'  EN model override: {args.en_model}')
     if args.he_model:
         print(f'  HE model override: {args.he_model}')
-    harness = EvaluationHarness(args.data_dir, en_model_path=args.en_model,
-                                he_model_path=args.he_model, mode=args.mode)
-    print(f'Models loaded (mode={args.mode}).\n')
+    print(f'Mode={args.mode}, jobs={args.jobs}.\n')
 
     # ── run tests ──
     model_override = args.en_model if args.lang == 'en' else args.he_model
     model_path = model_override if model_override else os.path.join(args.data_dir, f'{args.lang}_quadgrams.json')
     corpus_path = args.text_file
 
+    common = dict(data_dir=args.data_dir, en_model_path=args.en_model,
+                  he_model_path=args.he_model, mode=args.mode, jobs=args.jobs)
+
     if args.test in ('fp', 'both'):
-        fp = harness.test_false_positives(lines, args.lang, args.baseline_delta)
+        fp = run_test('fp', lines, args.lang, args.baseline_delta, **common)
         print_fp_report(fp, corpus_path, model_path, provenance)
 
     if args.test in ('fn', 'both'):
-        fn = harness.test_false_negatives(lines, args.lang, args.baseline_delta)
+        fn = run_test('fn', lines, args.lang, args.baseline_delta, **common)
         print_fn_report(fn, corpus_path, model_path, provenance)
 
 
