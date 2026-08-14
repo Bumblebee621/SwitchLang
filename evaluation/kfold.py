@@ -51,8 +51,8 @@ def _prune(min_count):
 # second hook here for a model class; see evaluation/EXPERIMENTS.md.
 VARIANTS = {
     'unpruned': lambda m: m,
-    'prune2': _prune(2),
-    'prune3': _prune(3),   # what build_quadgrams.py currently ships
+    'prune2': _prune(2),   # what build_quadgrams.py currently ships
+    'prune3': _prune(3),
     'prune5': _prune(5),
     'prune7': _prune(7),
 }

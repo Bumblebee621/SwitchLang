@@ -19,9 +19,9 @@ logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 100_000  # Lines per process
 
-# Quadgrams below this count are ~50% of distinct keys but <0.1% of token mass.
-# TODO: unvalidated — sweep 2/3/5 against the benchmark.
-MIN_QUADGRAM_COUNT = 3
+# Drops 43% of keys for +3.5% false positives (5-fold, evaluation/kfold.py).
+# The rare tail grows with the corpus, so revisit this if the corpus does.
+MIN_QUADGRAM_COUNT = 2
 
 def _process_chunk(lines, allowed_chars=None):
     """
