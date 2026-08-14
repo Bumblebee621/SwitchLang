@@ -3,65 +3,29 @@ import os
 import sys
 import time
 import logging
-from collections import Counter
-from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # Ensure we can use the same processing logic as build_quadgrams.py
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from build_quadgrams import _process_chunk, ALLOWED_EN, CHUNK_SIZE
+from build_quadgrams import (ALLOWED_EN, MIN_QUADGRAM_COUNT,
+                             build_quadgrams_from_lines)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s]: %(message)s')
 logger = logging.getLogger(__name__)
 
-def build_so_quadgrams(file_path):
-    """Build quadgram model for the Stack Overflow corpus."""
-    total_quads = Counter()
-    total_tris = Counter()
-    total_bis = Counter()
-    total_chars = set()
+def build_so_quadgrams(file_path, min_count=MIN_QUADGRAM_COUNT):
+    """Build the Stack Overflow model.
 
+    Shares build_quadgrams_from_lines so pruning stays in step: technical mode
+    takes max(en, so), and pruning one model but not the other would tilt that
+    choice.
+    """
     if not os.path.exists(file_path):
         logger.error(f"File not found: {file_path}")
         return None
 
-    num_workers = os.cpu_count() or 4
-    logger.info(f"Building SO model using {num_workers} processes from {file_path}...")
-
+    # errors='ignore' — the scraped corpus carries some invalid UTF-8.
     with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-        with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            futures = []
-            chunk = []
-            
-            for line in f:
-                chunk.append(line)
-                if len(chunk) >= CHUNK_SIZE:
-                    futures.append(executor.submit(_process_chunk, chunk, ALLOWED_EN))
-                    chunk = []
-            
-            if chunk:
-                futures.append(executor.submit(_process_chunk, chunk, ALLOWED_EN))
-
-            total_chunks = len(futures)
-            for i, future in enumerate(as_completed(futures)):
-                try:
-                    quads, tris, bis, chars = future.result()
-                    total_quads.update(quads)
-                    total_tris.update(tris)
-                    total_bis.update(bis)
-                    total_chars.update(chars)
-                    
-                    if (i + 1) % 5 == 0 or (i + 1) == total_chunks:
-                        print(f"\r  Progress: {i + 1}/{total_chunks} chunks merged...", end="", flush=True)
-                except Exception as e:
-                    logger.error(f"Error processing chunk: {e}")
-            print()
-
-    return {
-        'quadgram_counts': dict(total_quads),
-        'trigram_counts': dict(total_tris),
-        'bigram_counts': dict(total_bis),
-        'vocab_size': len(total_chars) + 1
-    }
+        return build_quadgrams_from_lines(f, ALLOWED_EN, min_count)
 
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
