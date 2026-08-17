@@ -25,6 +25,37 @@ Derivation of the word counts: `scripts/build_quadgrams.py` pads every word as `
 one bigram per word token starts with a space. Summing those gives the word count; `total_bigrams - W` gives
 the summed length. Both cross-check exactly against the trigram and quadgram totals.
 
+## Technical mode — measured
+
+`_score_text_en` returns `max(score_en, score_so)`, so technical mode can only *raise* the English score.
+That fixes the sign per corpus before any measurement: on English the raised score is the correct one
+(active in the FP test, shadow in the FN test) so both improve, and on Hebrew it is the wrong one in both
+directions so both degrade. The open question was only the magnitude, and whether the gain on technical text
+justifies the loss.
+
+Measured by `evaluation/technical_mode.py` at delta 4.0, K=5, fold 0. The `so` and `he` models were built
+without their test lines; `en` reuses the shipped model and is a floor check, not a clean measurement.
+
+| arm | words | FP/1k std → tech | FN/1k std → tech |
+|---|---|---|---|
+| so (held out) | 2,137,289 | 0.363 → 0.082 (−77%) | 2.112 → 0.771 (−64%) |
+| en | 2,845,199 | 0.295 → 0.215 (−27%) | 3.483 → 1.876 (−46%) |
+| he (held out) | 1,636,374 | 0.196 → 0.362 (**+85%**) | 5.349 → 10.106 (**+89%**) |
+
+The mode works: on held-out Stack Overflow text it removes three quarters of the false positives. It also
+helps *plain* English by a quarter, which is not what the name suggests — the SO model is not merely a
+technical-vocabulary supplement, it is a second English model whose rare tail covers strings CulturaX does
+not.
+
+That same permissiveness is the Hebrew cost. Hebrew shadow strings are Latin mojibake, exactly the sort of
+unusual character sequence SO's identifier-and-code tail makes plausible, so the inflated English score both
+pulls the user out of Hebrew (FP) and holds them on the wrong layout (FN). Roughly doubling both is severe
+enough that the mode must stay opt-in and per-context; leaving it on globally is a bad default for anyone who
+types Hebrew.
+
+Worth noting for Arm C: this is the same failure shape — an English score that runs hot relative to Hebrew —
+reached by a different route.
+
 ## Arm A — positional n-grams
 
 Condition each estimate on the position of the n-gram within the word, so the model asks "how likely is this

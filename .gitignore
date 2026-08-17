@@ -40,6 +40,7 @@ data/*.gz
 data/*.json
 data/backup_opus/
 data/fold_counts/
+data/technical_mode/
 !data/en_quadgrams.json
 !data/he_quadgrams.json
 !data/so_quadgrams.json
