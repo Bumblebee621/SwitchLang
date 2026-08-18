@@ -39,8 +39,9 @@ data/*.txt
 data/*.gz
 data/*.json
 data/backup_opus/
-data/fold_counts/
+data/fold_counts
 data/technical_mode/
+data/combination_exp/
 !data/en_quadgrams.json
 !data/he_quadgrams.json
 !data/so_quadgrams.json
@@ -50,6 +51,13 @@ data/technical_mode/
 Bugs.md
 Bugs 2.0.md
 Output/
+
+# Claude Code
+# Worktrees are full checkouts of this repo — committing them would nest the
+# repo inside itself. Shared config (settings.json, commands/, agents/, skills/)
+# is deliberately NOT ignored, so it can be tracked if any is ever added.
+.claude/worktrees/
+.claude/settings.local.json
 
 # IDEs
 .idea/
