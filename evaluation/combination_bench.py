@@ -43,13 +43,20 @@ Read-only with respect to data/: models are read, nothing is written.
 Usage:
     python evaluation/combination_bench.py --arms so
     python evaluation/combination_bench.py --arms so,en,he --variants standard,max,mixture:0.2
+    python evaluation/combination_bench.py --status-file data/combination_exp/status.json
+
+--status-file writes a live JSON snapshot — current arm, current variant, chunk
+progress, and every row finished so far — so a long run redirected to a log can
+still be queried precisely while it runs.
 """
 
 import argparse
+import json
 import os
 import statistics
 import sys
 import time
+from concurrent.futures import as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -112,6 +119,106 @@ class CombinationHarness(EvaluationHarness):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# PROGRESS REPORTING
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# A full sweep is tens of minutes of silence otherwise: the arm builders print
+# once, then each variant prints only when both its tests have finished.  The
+# bar covers the inner loop, and the status file makes the same state readable
+# from outside the process — the run is usually redirected to a log, and tailing
+# a log full of carriage returns is not a status check.
+
+class Progress:
+    """Chunk-completion bar for one test of one variant.
+
+    Falls back to periodic lines when stdout is not a terminal, so a redirected
+    log stays greppable instead of accumulating \\r-overwritten fragments.
+    """
+
+    WIDTH = 24
+
+    def __init__(self, label, total, status=None, stream=sys.stdout):
+        self.label = label
+        self.total = max(1, total)
+        self.status = status
+        self.stream = stream
+        self.tty = hasattr(stream, 'isatty') and stream.isatty()
+        self.done = 0
+        self.t0 = time.time()
+        self._last_decile = -1
+        self._draw()
+
+    def advance(self, n=1):
+        self.done += n
+        self._draw()
+
+    def _bar(self, frac):
+        filled = int(frac * self.WIDTH)
+        return '█' * filled + '░' * (self.WIDTH - filled)
+
+    def _draw(self):
+        frac = self.done / self.total
+        elapsed = time.time() - self.t0
+        if self.status:
+            self.status.set(chunks_done=self.done, chunks_total=self.total,
+                            chunk_frac=round(frac, 3),
+                            variant_elapsed_sec=round(elapsed, 1))
+        if self.tty:
+            self.stream.write(
+                f'\r    {self.label:<22} {self._bar(frac)} '
+                f'{self.done:>3}/{self.total} {elapsed:>5.0f}s')
+            self.stream.flush()
+        else:
+            decile = int(frac * 10)
+            if decile > self._last_decile:
+                self._last_decile = decile
+                self.stream.write(
+                    f'    {self.label:<22} {frac:>4.0%} '
+                    f'({self.done}/{self.total} chunks, {elapsed:.0f}s)\n')
+                self.stream.flush()
+
+    def close(self):
+        if self.tty:
+            self.stream.write('\r' + ' ' * 78 + '\r')
+            self.stream.flush()
+
+
+class StatusFile:
+    """Live JSON snapshot of the run, replaced atomically after every update.
+
+    Written so a reader never catches a half-flushed file: the temp-then-replace
+    means any single read sees one consistent state, however often it polls.
+    """
+
+    def __init__(self, path):
+        self.path = path
+        self.state = {'started': time.strftime('%Y-%m-%d %H:%M:%S'),
+                      'pid': os.getpid(), 'results': {}}
+        if path:
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            self._flush()
+
+    def set(self, **kw):
+        if not self.path:
+            return
+        self.state.update(kw)
+        self.state['updated'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        self._flush()
+
+    def record(self, arm, variant, row):
+        if not self.path:
+            return
+        self.state.setdefault('results', {}).setdefault(arm, {})[variant] = row
+        self.set()
+
+    def _flush(self):
+        tmp = self.path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(self.state, f, indent=2)
+        os.replace(tmp, self.path)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # PARALLEL EXECUTION
 # ═══════════════════════════════════════════════════════════════════════════
 #
@@ -135,7 +242,7 @@ def _run_chunk(job):
     return method(lines, lang, delta, line_offset=offset, progress=False)
 
 
-def run_test(test, lines, lang, delta, key, jobs=1):
+def run_test(test, lines, lang, delta, key, jobs=1, label='', status=None):
     """Run the 'fp' or 'fn' test over *lines* with the engine described by key."""
     if jobs <= 1:
         harness = CombinationHarness(*key)
@@ -149,8 +256,18 @@ def run_test(test, lines, lang, delta, key, jobs=1):
               for i in range(0, len(lines), size)]
 
     t0 = time.time()
-    reports = list(_get_pool(jobs).map(_run_chunk, chunks))
-    merged = _merge_reports(reports)
+    # submit + as_completed rather than map, so the bar can advance as workers
+    # finish.  Results are merged in submission order regardless of completion
+    # order — _merge_reports concatenates flagged_lines and latency_values, and
+    # only the ordering of those lists would otherwise vary run to run.
+    pool = _get_pool(jobs)
+    futures = [pool.submit(_run_chunk, chunk) for chunk in chunks]
+    bar = Progress(label or test, len(futures), status=status)
+    for _ in as_completed(futures):
+        bar.advance()
+    bar.close()
+
+    merged = _merge_reports([f.result() for f in futures])
     merged.elapsed_sec = time.time() - t0
     return merged
 
@@ -190,7 +307,7 @@ def resolve_variant(spec, arm_kwargs, data_dir, so_flavour, merged_dir):
     raise SystemExit(f'unknown variant: {spec}')
 
 
-def run_arm(name, arm_kwargs, test, eligible, variants, args):
+def run_arm(name, arm_kwargs, test, eligible, variants, args, status=None):
     """Score every variant over one arm's held-out lines."""
     if args.max_test_lines:
         test = test[:args.max_test_lines]
@@ -203,12 +320,17 @@ def run_arm(name, arm_kwargs, test, eligible, variants, args):
     so_flavour = 'heldout' if name == 'so' else 'shipped'
 
     rows = {}
-    for spec in variants:
+    for v_idx, spec in enumerate(variants, 1):
         key = resolve_variant(spec, arm_kwargs, data_dir, so_flavour,
                               args.merged_dir)
+        if status:
+            status.set(arm=name, variant=spec, variant_index=v_idx,
+                       variant_count=len(variants), lines=len(test))
         t0 = time.time()
-        fp = run_test('fp', test, lang, args.baseline_delta, key, jobs=args.jobs)
-        fn = run_test('fn', test, lang, args.baseline_delta, key, jobs=args.jobs)
+        fp = run_test('fp', test, lang, args.baseline_delta, key, jobs=args.jobs,
+                      label=f'{name} {spec} fp', status=status)
+        fn = run_test('fn', test, lang, args.baseline_delta, key, jobs=args.jobs,
+                      label=f'{name} {spec} fn', status=status)
         rows[spec] = {
             'words': fp.words_tested,
             'fp': fp.fp_count,
@@ -218,6 +340,8 @@ def run_arm(name, arm_kwargs, test, eligible, variants, args):
             'sec': time.time() - t0,
         }
         r = rows[spec]
+        if status:
+            status.record(name, spec, r)
         print(f'  {spec:<14} FP/1k {r["fp1k"]:.3f}  FN/1k {r["fn1k"]:.3f}  '
               f'({r["sec"]:.0f}s)', flush=True)
     return rows
@@ -273,14 +397,25 @@ def main():
     parser.add_argument('--merged-dir', default=os.path.join(default_data, 'combination_exp'),
                         help='Where merge_en_so_counts.py wrote the merged models.')
     parser.add_argument('-j', '--jobs', type=int, default=os.cpu_count() or 1, metavar='N')
+    parser.add_argument('--status-file', default=None, metavar='PATH',
+                        help='Write live progress and finished rows here as JSON. '
+                             'Readable mid-run; replaced atomically.')
     args = parser.parse_args()
 
     os.makedirs(args.work_dir, exist_ok=True)
     arms = [a.strip() for a in args.arms.split(',') if a.strip()]
     variants = [v.strip() for v in args.variants.split(',') if v.strip()]
 
+    status = StatusFile(args.status_file) if args.status_file else None
+    if status:
+        status.set(arms=arms, variants=variants, jobs=args.jobs,
+                   max_test_lines=args.max_test_lines, fold=args.fold,
+                   phase='starting')
+
     results = {}
     for arm in arms:
+        if status:
+            status.set(arm=arm, phase='building arm')
         if arm == 'so':
             kwargs, test, eligible = build_so_arm(
                 args.data_dir, args.work_dir, args.k, args.fold)
@@ -291,8 +426,12 @@ def main():
             kwargs, test, eligible = build_en_arm(args.data_dir, args.max_test_lines)
         else:
             parser.error(f'Unknown arm: {arm}')
-        results[arm] = run_arm(arm, kwargs, test, eligible, variants, args)
+        if status:
+            status.set(phase='scoring')
+        results[arm] = run_arm(arm, kwargs, test, eligible, variants, args, status)
 
+    if status:
+        status.set(phase='done', variant=None)
     print_table(results, variants)
 
 
