@@ -56,6 +56,77 @@ types Hebrew.
 Worth noting for Arm C: this is the same failure shape — an English score that runs hot relative to Hebrew —
 reached by a different route.
 
+## Combining the two English models — measured
+
+`max()` is an upper envelope, so the asymmetry above is structural rather than incidental: it can only raise
+the English side. The SO model is ~18x smaller under the same add-1 smoothing, so it is flatter and its
+penalty for unseen n-grams is milder. Measured directly: over 3,000 random junk strings the SO model wins
+61% of the time and inflates the English score by **1.71 nats on average**, against a delta of 4.0.
+`evaluation/calibrate_models.py` confirms it on real text — SO runs at −1.29 nats/char with σ 0.57 against
+EN's −1.48 with σ 0.75, i.e. both more generous and flatter.
+
+Three alternatives, measured by `evaluation/combination_bench.py` at delta 4.0, K=5, fold 0, 75,000 lines
+per arm. `mixture:W` is `log((1−W)·P_en + W·P_so)`, of which `max` is the degenerate limit; `merged:S` sums
+the count tables with SO scaled by S (`scripts/merge_en_so_counts.py`), moving interpolation down to the
+quadgram context and halving runtime scoring; `calibrated` rescales the SO score onto EN's nats/char scale
+before the max.
+
+| variant | so FP/1k | so FN/1k | en FP/1k | en FN/1k | he FP/1k | he FN/1k |
+|---|---|---|---|---|---|---|
+| standard | 0.363 | 2.112 | 0.295 | 3.483 | 0.196 | 5.349 |
+| **max** (shipped) | **0.082** | **0.771** | **0.215** | **1.876** | **0.362** | **10.106** |
+| mixture:0.1 | 0.219 | 1.301 | 0.252 | 2.184 | 0.224 | 8.173 |
+| mixture:0.2 | 0.183 | 1.227 | 0.258 | 2.192 | 0.240 | 8.321 |
+| mixture:0.35 | 0.128 | 1.124 | 0.274 | 2.227 | 0.241 | 8.227 |
+| mixture:0.5 | 0.101 | 0.976 | 0.302 | 2.366 | 0.256 | 8.398 |
+| mixture:0.65 | 0.109 | 0.980 | 0.343 | 2.548 | 0.258 | 7.705 |
+| mixture:0.8 | 0.117 | 0.923 | 0.425 | 2.844 | 0.266 | 6.948 |
+| mixture:0.9 | 0.133 | 0.936 | 0.538 | 3.237 | 0.266 | 6.508 |
+| merged:1 | 0.265 | 1.574 | 0.297 | 3.516 | 0.198 | 5.345 |
+| merged:5 | 0.244 | 1.508 | 0.337 | 3.622 | 0.200 | 5.136 |
+| merged:18 | 0.163 | 1.393 | 0.418 | 4.004 | 0.197 | 4.377 |
+| calibrated | 0.289 | 1.587 | 0.292 | 3.462 | 0.207 | 5.760 |
+
+**No variant dominates.** Paired block-bootstrap 95% CIs against `max` (`evaluation/sample_size.py`) put
+every trade firmly outside zero in *both* directions:
+
+| variant | so FP/1k vs max | so FN/1k vs max | he FP/1k vs max | he FN/1k vs max |
+|---|---|---|---|---|
+| mixture:0.35 | +55% [+41, +73] | +47% [+32, +67] | −34% [−38, −29] | −19% [−23, −15] |
+| mixture:0.5 | +23% [+15, +33] | +27% [+16, +41] | −29% [−33, −26] | −17% [−20, −14] |
+| merged:18 | +98% [+77, +122] | +82% [+63, +107] | −46% [−51, −41] | −57% [−61, −53] |
+
+So the choice is a genuine product judgement about how Hebrew damage trades against technical accuracy, not
+a measurement question. Three things the numbers do settle:
+
+- **The mixture weight is not a free parameter above 0.5.** Higher weights keep buying Hebrew (he FN falls to
+  +22% at W=0.9) but wreck plain English, where FP/1k runs 0.302 → 0.343 → 0.425 → 0.538 across W = 0.5 →
+  0.9, ending up **+83% worse than standard mode**. The usable range is W ≤ 0.5.
+- **`merged` buys the most Hebrew and costs the most English.** At S=18 it is the only variant that leaves
+  Hebrew *better* than standard mode on FN (4.377 vs 5.349) while still halving SO false positives, but its
+  en arm degrades +42% FP — the scaled SO counts swamp a model trained on 18x more text. Its one structural
+  advantage is cost: one `score()` call at runtime instead of two.
+- **`calibrated` is nearly a no-op.** It removes the flatness bias as intended, and what remains is small in
+  both directions (so −20% FP, he +5% FP). This closes Arm C for the EN/SO pair: the inter-model offset is
+  real but is *not* the main mechanism — most of `max`'s effect is the envelope itself, not the miscalibration.
+
+### On sample size
+
+`evaluation/sample_size.py` block-bootstraps these arms. The binding constraint is the FP *count*, not the
+line count: the so arm at 75,000 lines yields 176 FPs under `max`, carrying ~1/sqrt(176) = 7.5% relative
+standard error however many words they are divided by. Precision therefore improves as 1/sqrt(N) with no
+knee, and the sample size has to be chosen against a decision:
+
+- **Variant vs standard mode** is resolvable at **3,500 lines** — every such comparison already excludes zero
+  there, and the point estimates are converged (standard reads 0.362 FP/1k at 3,500 against 0.363 at 75,000).
+- **Variant vs variant** needs the full corpus. Separating `max` from `mixture:0.5` means resolving ~5 points
+  of a −77% vs −72% difference; only the *paired* bootstrap does it, because pairing on blocks cancels the
+  shared line-to-line difficulty that dominates the unpaired intervals.
+
+Screen at 7,500 lines, confirm finalists at 75,000. The mixture-weight sweep above was run entirely at full
+size, which is backwards — the differences among W = 0.5, 0.65, 0.8 on the so arm (0.101 / 0.109 / 0.117)
+sit inside the ±14% interval and should not be read as a ranking.
+
 ## Arm A — positional n-grams
 
 Condition each estimate on the position of the n-gram within the word, so the model asks "how likely is this
@@ -143,6 +214,11 @@ and a true likelihood ratio should include that — so this is a hypothesis, not
 
 If confirmed, the fix is one scalar per model, subtracted as `H_model × chars_scored` before differencing in
 `EvaluationEngine.evaluate`. Zero size cost.
+
+**Measured for the EN/SO pair** (see "Combining the two English models"), where the same offset exists —
+SO −1.29 nats/char against EN −1.48 — and calibrating it away changes little. That is evidence about the
+EN/SO pair only; the EN/HE offset above is larger, applies to every switch decision rather than to technical
+mode alone, and remains untested.
 
 ## Note on evidence accumulation
 
