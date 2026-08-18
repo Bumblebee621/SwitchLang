@@ -8,10 +8,12 @@ it is flatter, its penalty for unseen n-grams is milder, and it wins on junk as
 well as on genuine technical text.  EXPERIMENTS.md measures the bill: the SO arm
 improves 77%/64% while the Hebrew arm regresses 85%/89%.
 
-This file leaves benchmark.py and technical_mode.py untouched.  It reuses their
-machinery — EvaluationHarness for the replay itself, the arm builders for the
-held-out fold models — and adds only what the comparison needs: an engine
-constructed with the combination parameters, and a worker cache keyed on them.
+This file leaves core/, benchmark.py and technical_mode.py untouched.  It reuses
+their machinery — EvaluationEngine and EvaluationHarness for the replay itself,
+the arm builders for the held-out fold models — and adds only what the
+comparison needs: a subclass carrying the alternative rules, and a worker cache
+keyed on them.  max() won this comparison and still ships, so the losing
+branches stay out of the production scoring path.
 
 Four families are compared per arm:
 
@@ -52,6 +54,7 @@ still be queried precisely while it runs.
 
 import argparse
 import json
+import math
 import os
 import statistics
 import sys
@@ -89,13 +92,88 @@ DEFAULT_VARIANTS = (
 # HARNESS
 # ═══════════════════════════════════════════════════════════════════════════
 
-class CombinationHarness(EvaluationHarness):
-    """EvaluationHarness that also passes the combination knobs to the engine.
+def logaddexp(a, b):
+    """log(exp(a) + exp(b)), computed without overflowing.
 
-    benchmark.EvaluationHarness hard-codes en_combine at its default, so the
-    constructor is re-implemented rather than extended; everything below it —
-    _simulate_word, the FP and FN tests — is inherited unchanged, which is what
-    keeps these numbers comparable to the EXPERIMENTS.md table.
+    Stdlib-only rather than numpy's, because the engine this subclasses ships
+    through PyInstaller without numpy and the two must agree.  Factoring out the
+    larger term keeps the exponentials in range for the very negative
+    log-probabilities score() returns.
+    """
+    if a < b:
+        a, b = b, a
+    diff = b - a
+    if diff < -700:  # exp(diff) underflows to 0; a already is the answer
+        return a
+    return a + math.log1p(math.exp(diff))
+
+
+class CombinationEngine(EvaluationEngine):
+    """EvaluationEngine with the alternative combination rules bolted on.
+
+    These live here rather than in core/engine.py deliberately.  max() won the
+    comparison and remains what ships, so putting the losing branches on the
+    production scoring hot path would be carrying dead weight for an answered
+    question.  Subclassing keeps every other decision — collisions, delta,
+    logging, the evaluate() pipeline — identical to production, so the only
+    difference these numbers can reflect is the combination rule itself.
+    """
+
+    def __init__(self, *args, en_combine='max', so_weight=0.5,
+                 so_calibration=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.en_combine = en_combine
+        self.so_weight = so_weight
+        self.so_calibration = so_calibration
+
+    def _score_text_en(self, text, mode=None):
+        """Technical mode has two English models to reconcile.
+
+        How they combine matters: the result is differenced against the Hebrew
+        score and compared to delta, so any systematic offset moves the decision
+        boundary.
+
+        'max'        — what ships.  An upper envelope, so it can only raise the
+                       English side, never lower it.  The SO model is ~18x
+                       smaller with the same add-1 smoothing, hence flatter, so
+                       its penalty for unseen n-grams is milder and it wins on
+                       junk as well as on genuine technical text.
+        'mixture'    — a real mixture LM: log((1-w)*P_en + w*P_so).  'max' is its
+                       degenerate limit.  The weight charges the SO branch a flat
+                       log(w) nats, which damps the junk bonus while leaving
+                       large true technical gains intact.
+        'calibrated' — rescale the SO score onto the English model's
+                       nats-per-char scale before taking the max, so the two are
+                       compared on equal footing and the flatness bias drops out.
+        """
+        effective_mode = mode if mode is not None else self.model_mode
+        score_std = self.en_model.score(text)
+        if effective_mode != 'technical' or not self.en_so_model:
+            return score_std
+
+        score_so = self.en_so_model.score(text)
+
+        if self.en_combine == 'mixture':
+            w = self.so_weight
+            return logaddexp(math.log(1.0 - w) + score_std,
+                             math.log(w) + score_so)
+
+        if self.en_combine == 'calibrated':
+            mu_en, sigma_en, mu_so, sigma_so = self.so_calibration
+            n = len(text)
+            so_adj = mu_en * n + (sigma_en / sigma_so) * (score_so - mu_so * n)
+            return max(score_std, so_adj)
+
+        return max(score_std, score_so)
+
+
+class CombinationHarness(EvaluationHarness):
+    """EvaluationHarness wired to CombinationEngine.
+
+    The constructor is re-implemented rather than extended because the parent
+    builds a plain EvaluationEngine; everything below it — _simulate_word, the
+    FP and FN tests — is inherited unchanged, which is what keeps these numbers
+    comparable to the EXPERIMENTS.md table.
     """
 
     def __init__(self, data_dir, en_model_path=None, he_model_path=None,
@@ -106,7 +184,7 @@ class CombinationHarness(EvaluationHarness):
             models['en'] = QuadgramModel(en_model_path)
         if he_model_path:
             models['he'] = QuadgramModel(he_model_path)
-        self.engine = EvaluationEngine(
+        self.engine = CombinationEngine(
             models['en'], models['he'],
             collisions_path=os.path.join(data_dir, 'collisions.json'),
             enable_logging=False,

@@ -13,22 +13,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def logaddexp(a, b):
-    """log(exp(a) + exp(b)), computed without overflowing.
-
-    Stdlib-only stand-in for numpy.logaddexp — core/ ships through PyInstaller
-    and numpy is not a dependency. Factoring out the larger term keeps the
-    exponentials in range for the very negative log-probabilities score()
-    returns.
-    """
-    if a < b:
-        a, b = b, a
-    diff = b - a
-    if diff < -700:  # exp(diff) underflows to 0; a already is the answer
-        return a
-    return a + math.log1p(math.exp(diff))
-
-
 class QuadgramModel:
     """Character-level quadgram scorer with Laplace (add-1) smoothing."""
 

@@ -7,14 +7,11 @@ Tier 2: Quadgram probabilistic model scoring.
 
 import csv
 import json
-import math
 import os
 import threading
 import logging
 from datetime import datetime
 from collections import deque
-
-from core.quadgram import logaddexp
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +22,8 @@ class EvaluationEngine:
     MAX_CSV_SIZE_BYTES = 10 * 1024 * 1024
     MAX_CSV_LINES = 10000
 
-    def __init__(self, en_model, he_model, collisions_path=None, storage_dir=None,
-                 enable_logging=True, en_so_model=None, model_mode='standard',
-                 en_combine='max', so_weight=0.5, so_calibration=None):
+    def __init__(self, en_model, he_model, collisions_path=None, storage_dir=None, 
+                 enable_logging=True, en_so_model=None, model_mode='standard'):
         """Initialize with quadgram models and optional collision set.
 
         Args:
@@ -38,21 +34,11 @@ class EvaluationEngine:
             enable_logging: Whether to log decisions to a CSV file.
             en_so_model: Optional QuadgramModel for Stack Overflow English.
             model_mode: 'standard', 'smart', or 'technical'.
-            en_combine: How technical mode folds the SO score into the English
-                        score — 'max', 'mixture', or 'calibrated'. See
-                        _score_text_en.
-            so_weight: Mixture weight on the SO model, in (0, 1). Only read
-                       when en_combine='mixture'.
-            so_calibration: (mu_en, sigma_en, mu_so, sigma_so) nats-per-char
-                            constants. Only read when en_combine='calibrated'.
         """
         self.en_model = en_model
         self.he_model = he_model
         self.en_so_model = en_so_model
         self.model_mode = model_mode
-        self.en_combine = en_combine
-        self.so_weight = so_weight
-        self.so_calibration = so_calibration
         self.enable_logging = enable_logging
 
         self.collisions = set()
@@ -180,45 +166,13 @@ class EvaluationEngine:
         )
 
     def _score_text_en(self, text, mode=None):
-        """Score text using English model(s) based on current mode.
-
-        Technical mode has two English models to reconcile. How they combine
-        matters: the result is differenced against the Hebrew score and
-        compared to delta, so any systematic offset moves the decision
-        boundary.
-
-        'max'        — the shipped rule. An upper envelope, so it can only
-                       raise the English side, never lower it. The SO model is
-                       ~18x smaller with the same add-1 smoothing, hence
-                       flatter, so its penalty for unseen n-grams is milder and
-                       it wins on junk as well as on genuine technical text.
-        'mixture'    — a real mixture LM: log(w*P_en + (1-w)*P_so). 'max' is its
-                       degenerate limit. The weight charges the SO branch a flat
-                       log(1-w) nats, which damps the junk bonus while leaving
-                       large true technical gains intact.
-        'calibrated' — rescale the SO score onto the English model's
-                       nats-per-char scale before taking the max, so the two are
-                       compared on equal footing and the flatness bias drops out.
-        """
+        """Score text using English model(s) based on current mode."""
         effective_mode = mode if mode is not None else self.model_mode
         score_std = self.en_model.score(text)
-        if effective_mode != 'technical' or not self.en_so_model:
-            return score_std
-
-        score_so = self.en_so_model.score(text)
-
-        if self.en_combine == 'mixture':
-            w = self.so_weight
-            return logaddexp(math.log(1.0 - w) + score_std,
-                             math.log(w) + score_so)
-
-        if self.en_combine == 'calibrated':
-            mu_en, sigma_en, mu_so, sigma_so = self.so_calibration
-            n = len(text)
-            so_adj = mu_en * n + (sigma_en / sigma_so) * (score_so - mu_so * n)
-            return max(score_std, so_adj)
-
-        return max(score_std, score_so)
+        if effective_mode == 'technical' and self.en_so_model:
+            score_so = self.en_so_model.score(text)
+            return max(score_std, score_so)
+        return score_std
 
     def evaluate(self, s_active, s_shadow, delta,
                  current_layout='en', on_delimiter=False, mode=None):

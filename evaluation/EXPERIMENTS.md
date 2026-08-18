@@ -97,7 +97,10 @@ every trade firmly outside zero in *both* directions:
 | merged:18 | +98% [+77, +122] | +82% [+63, +107] | −46% [−51, −41] | −57% [−61, −53] |
 
 So the choice is a genuine product judgement about how Hebrew damage trades against technical accuracy, not
-a measurement question. Three things the numbers do settle:
+a measurement question. **Decided: `max()` stays**, on the grounds that its Hebrew cost is already mitigated
+by the mode being opt-in and per-context, which makes the best technical accuracy worth keeping. The losing
+rules live in `CombinationEngine` in `evaluation/combination_bench.py`, not in `core/` — the production
+scoring path should not carry branches for an answered question. Three things the numbers do settle:
 
 - **The mixture weight is not a free parameter above 0.5.** Higher weights keep buying Hebrew (he FN falls to
   +22% at W=0.9) but wreck plain English, where FP/1k runs 0.302 → 0.343 → 0.425 → 0.538 across W = 0.5 →
