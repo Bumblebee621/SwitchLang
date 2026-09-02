@@ -41,6 +41,7 @@ data/*.json
 data/backup_opus/
 data/fold_counts/
 data/technical_mode/
+data/calibration/
 !data/en_quadgrams.json
 !data/he_quadgrams.json
 !data/so_quadgrams.json
