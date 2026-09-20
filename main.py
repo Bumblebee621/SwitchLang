@@ -82,6 +82,7 @@ def set_debug_mode(enabled):
             root.removeHandler(_log_file_handler)
         root.setLevel(logging.WARNING)
 
+from PyQt6.QtCore import QDir, QTimer
 from PyQt6.QtWidgets import QApplication
 
 from core.quadgram import load_models
@@ -119,40 +120,27 @@ def load_config():
 
 
 def load_stylesheet():
-    """Load the QSS stylesheet and fix relative resource paths.
+    """Load the QSS stylesheet.
 
     Returns:
         QSS string or empty string if file not found.
     """
     if os.path.exists(STYLE_PATH):
         with open(STYLE_PATH, 'r', encoding='utf-8') as f:
-            content = f.read()
-            
-            # Fix relative resource paths for PyInstaller bundling.
-            # Convert url("ui/...") and url("data/...") to use absolute paths 
-            # based on BUNDLE_DIR so they resolve correctly even when frozen.
-            # We use forward slashes because QSS expects them even on Windows.
-            safe_bundle_dir = BUNDLE_DIR.replace('\\', '/')
-            content = content.replace('url("ui/', f'url("{safe_bundle_dir}/ui/')
-            content = content.replace('url("data/', f'url("{safe_bundle_dir}/data/')
-            
-            return content
+            return f.read()
     return ''
 
 
 def check_data_files():
-    """Check that quadgram binary trie data files exist. If not, generate them."""
+    """Verify that required quadgram binary model files exist."""
     en_path = os.path.join(DATA_DIR, 'en_quadgrams.marisa')
     he_path = os.path.join(DATA_DIR, 'he_quadgrams.marisa')
 
     if not os.path.exists(en_path) or not os.path.exists(he_path):
-        print('Quadgram data files not found. Generating...')
-        scripts_dir = os.path.join(APP_DIR, 'scripts')
-        sys.path.insert(0, scripts_dir)
-        from build_quadgrams import main as build_main
-        build_main()
-        sys.path.pop(0)
-        print()
+        sys.exit(
+            f"Error: Model files not found in {DATA_DIR}.\n"
+            "Please run 'python scripts/build_quadgrams.py' to generate them."
+        )
 
 
 def on_settings_changed(config_data, hook_manager, sensitivity, engine):
@@ -239,6 +227,7 @@ def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
+    QDir.addSearchPath('ui', os.path.join(BUNDLE_DIR, 'ui'))
     stylesheet = load_stylesheet()
     if stylesheet:
         app.setStyleSheet(stylesheet)
@@ -270,7 +259,6 @@ def main():
 
     # A QTimer is needed to allow Python to process signals (like SIGINT) 
     # because the Qt event loop normally blocks Python's signal handling.
-    from PyQt6.QtCore import QTimer
     timer = QTimer()
     timer.start(500)
     timer.timeout.connect(lambda: None)  # Let the interpreter run

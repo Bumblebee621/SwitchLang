@@ -10,7 +10,7 @@ from PyQt6.QtCore import Qt, QSize, pyqtSignal, pyqtSlot
 import os
 
 
-def _create_tray_icon_pixmap(suspended=False):
+def _create_tray_icon_pixmap():
     """Create a programmatic 'SL' icon for the system tray."""
     size = 64
     pixmap = QPixmap(QSize(size, size))
@@ -19,32 +19,17 @@ def _create_tray_icon_pixmap(suspended=False):
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-    # Use muted colors for suspended state
-    bg_color = QColor('#45475a') if suspended else QColor('#89b4fa')
-    text_color = QColor('#bac2de') if suspended else QColor('#1e1e2e')
-
-    painter.setBrush(bg_color)
+    painter.setBrush(QColor('#89b4fa'))
     painter.setPen(Qt.PenStyle.NoPen)
     painter.drawRoundedRect(0, 0, size, size, 14, 14)
 
-    painter.setPen(text_color)
-    font = QFont('Segoe UI', 24, QFont.Weight.Bold)
-    painter.setFont(font)
+    painter.setPen(QColor('#1e1e2e'))
+    painter.setFont(QFont('Segoe UI', 24, QFont.Weight.Bold))
     painter.drawText(
         0, 0, size, size,
         Qt.AlignmentFlag.AlignCenter,
         'SL'
     )
-
-    if suspended:
-        # Draw a small pause indicator
-        painter.setBrush(QColor('#f38ba8'))
-        margin = 10
-        w = 6
-        h = 16
-        painter.drawRect(size - margin - w*2 - 2, size - margin - h, w, h)
-        painter.drawRect(size - margin - w, size - margin - h, w, h)
-
     painter.end()
     return pixmap
 
@@ -150,7 +135,7 @@ class SystemTrayApp(QSystemTrayIcon):
         if self._icon_path and os.path.exists(self._icon_path):
             pass
         else:
-            self.setIcon(QIcon(_create_tray_icon_pixmap(suspended=suspended)))
+            self.setIcon(QIcon(_create_tray_icon_pixmap()))
 
         if suspended:
             dur = self.hook_manager._suspend_duration
@@ -181,7 +166,6 @@ class SystemTrayApp(QSystemTrayIcon):
         """
         enabled = config_data.get('enabled', True)
         self._engine_enabled = enabled
-        self.hook_manager.set_enabled(enabled)
         self.toggle_action.setText(
             'Disable' if enabled else 'Enable'
         )

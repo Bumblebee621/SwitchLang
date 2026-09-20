@@ -3,8 +3,8 @@ osd.py — On-Screen Display (OSD) for real-time application feedback.
 """
 
 from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QGraphicsOpacityEffect
-from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QPoint
-from PyQt6.QtGui import QFont, QColor, QScreen, QGuiApplication
+from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
+from PyQt6.QtGui import QGuiApplication
 
 class SuspensionOSD(QWidget):
     """A sleek, animated overlay to show engine suspension state."""

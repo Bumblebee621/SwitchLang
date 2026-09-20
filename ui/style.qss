@@ -58,24 +58,6 @@ QLabel#subtitle_label {
     padding: 0px 4px 8px 4px;
 }
 
-QLabel#status_label {
-    font-size: 12px;
-    font-weight: bold;
-    padding: 4px 8px;
-    border-radius: 4px;
-}
-
-QLabel#status_active {
-    background-color: rgba(166, 227, 161, 0.15);
-    color: #a6e3a1;
-    border: 1px solid rgba(166, 227, 161, 0.3);
-}
-
-QLabel#status_inactive {
-    background-color: rgba(243, 139, 168, 0.15);
-    color: #f38ba8;
-    border: 1px solid rgba(243, 139, 168, 0.3);
-}
 
 QPushButton {
     background-color: #313244;
@@ -120,7 +102,7 @@ QPushButton#danger_button:hover {
     background-color: rgba(243, 139, 168, 0.3);
 }
 
-QCheckBox {
+QCheckBox, QRadioButton {
     color: #cdd6f4;
     spacing: 8px;
     padding: 4px;
@@ -138,7 +120,7 @@ QCheckBox::indicator {
 QCheckBox::indicator:checked {
     background-color: #89b4fa;
     border-color: #89b4fa;
-    image: url("ui/check.svg");
+    image: url("ui:check.svg");
 }
 
 QCheckBox::indicator:hover {

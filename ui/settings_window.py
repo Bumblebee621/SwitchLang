@@ -4,47 +4,43 @@ settings_window.py — Main settings dialog with General and Blacklist tabs.
 
 import json
 import os
+import threading
 
 from PyQt6.QtWidgets import (
     QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QCheckBox, QSlider, QPushButton, QLineEdit,
     QListWidget, QGroupBox, QFrame, QSizePolicy, QMessageBox,
-    QScrollArea, QSpinBox, QProgressBar, QDialog, QRadioButton,
-    QButtonGroup
+    QScrollArea, QSpinBox, QProgressBar, QDialog, QRadioButton
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QIcon, QKeyEvent
 
 from core.startup import is_startup_enabled, set_startup_enabled
 from core.updater import check_for_updates, download_and_install
 
-# Map Windows VK codes to human-readable names
-VK_NAME_MAP = {
-    0x08: 'Backspace', 0x09: 'Tab', 0x0D: 'Enter', 0x1B: 'Esc',
-    0x20: 'Space', 0x21: 'PgUp', 0x22: 'PgDn', 0x23: 'End', 0x24: 'Home',
-    0x25: 'Left', 0x26: 'Up', 0x27: 'Right', 0x28: 'Down',
-    0x2D: 'Insert', 0x2E: 'Delete',
-    0x30: '0', 0x31: '1', 0x32: '2', 0x33: '3', 0x34: '4',
-    0x35: '5', 0x36: '6', 0x37: '7', 0x38: '8', 0x39: '9',
-    0x41: 'A', 0x42: 'B', 0x43: 'C', 0x44: 'D', 0x45: 'E',
-    0x46: 'F', 0x47: 'G', 0x48: 'H', 0x49: 'I', 0x4A: 'J',
-    0x4B: 'K', 0x4C: 'L', 0x4D: 'M', 0x4E: 'N', 0x4F: 'O',
-    0x50: 'P', 0x51: 'Q', 0x52: 'R', 0x53: 'S', 0x54: 'T',
-    0x55: 'U', 0x56: 'V', 0x57: 'W', 0x58: 'X', 0x59: 'Y', 0x5A: 'Z',
-    0x60: 'Num0', 0x61: 'Num1', 0x62: 'Num2', 0x63: 'Num3', 0x64: 'Num4',
-    0x65: 'Num5', 0x66: 'Num6', 0x67: 'Num7', 0x68: 'Num8', 0x69: 'Num9',
-    0x6A: 'Num*', 0x6B: 'Num+', 0x6D: 'Num-', 0x6E: 'Num.', 0x6F: 'Num/',
-    0x70: 'F1', 0x71: 'F2', 0x72: 'F3', 0x73: 'F4', 0x74: 'F5',
-    0x75: 'F6', 0x76: 'F7', 0x77: 'F8', 0x78: 'F9', 0x79: 'F10',
-    0x7A: 'F11', 0x7B: 'F12',
-    0xFF: 'Fn', # Some laptop drivers map Fn here
-    0xBA: ';', 0xBB: '=', 0xBC: ',', 0xBD: '-', 0xBE: '.', 0xBF: '/',
-    0xC0: '`', 0xDB: '[', 0xDC: '\\', 0xDD: ']', 0xDE: "'",
-}
-
 VK_CONTROL = 0x11
 VK_SHIFT = 0x10
 VK_MENU = 0x12  # Alt
+
+VK_SPECIAL = {
+    0x08: 'Backspace', 0x09: 'Tab', 0x0D: 'Enter', 0x1B: 'Esc',
+    0x20: 'Space', 0x21: 'PgUp', 0x22: 'PgDn', 0x23: 'End', 0x24: 'Home',
+    0x25: 'Left', 0x26: 'Up', 0x27: 'Right', 0x28: 'Down',
+    0x2D: 'Insert', 0x2E: 'Delete', 0xFF: 'Fn',
+    0xBA: ';', 0xBB: '=', 0xBC: ',', 0xBD: '-', 0xBE: '.', 0xBF: '/',
+    0xC0: '`', 0xDB: '[', 0xDC: '\\', 0xDD: ']', 0xDE: "'",
+    0x6A: 'Num*', 0x6B: 'Num+', 0x6D: 'Num-', 0x6E: 'Num.', 0x6F: 'Num/',
+}
+
+
+def vk_name(vk):
+    if 0x41 <= vk <= 0x5A or 0x30 <= vk <= 0x39:
+        return chr(vk)
+    if 0x70 <= vk <= 0x7B:
+        return f'F{vk - 0x6F}'
+    if 0x60 <= vk <= 0x69:
+        return f'Num{vk - 0x60}'
+    return VK_SPECIAL.get(vk, f'0x{vk:02X}')
 
 
 def vk_list_to_label(vk_list):
@@ -52,53 +48,18 @@ def vk_list_to_label(vk_list):
     if not vk_list:
         return 'Not set'
     parts = []
-    modifiers_order = [(VK_CONTROL, 'Ctrl'), (VK_SHIFT, 'Shift'), (VK_MENU, 'Alt')]
     remaining = set(vk_list)
-    for vk, name in modifiers_order:
+    for vk, name in [(VK_CONTROL, 'Ctrl'), (VK_SHIFT, 'Shift'), (VK_MENU, 'Alt')]:
         if vk in remaining:
             parts.append(name)
             remaining.discard(vk)
     for vk in sorted(remaining):
-        parts.append(VK_NAME_MAP.get(vk, f'0x{vk:02X}'))
+        parts.append(vk_name(vk))
     return ' + '.join(parts)
 
 
-class NoWheelSlider(QSlider):
-    """A QSlider that ignores wheel events."""
-    def wheelEvent(self, event):
-        event.ignore()
-
-class NoWheelSpinBox(QSpinBox):
-    """A QSpinBox that ignores wheel events."""
-    def wheelEvent(self, event):
-        event.ignore()
 
 
-class UpdateWorker(QThread):
-    """Worker thread to check for updates without freezing UI."""
-    finished = pyqtSignal(str, str) # version, url
-
-    def run(self):
-        v, url = check_for_updates()
-        if v and url:
-            self.finished.emit(v, url)
-        else:
-            self.finished.emit("", "")
-
-class DownloadWorker(QThread):
-    """Worker thread to download and install updates."""
-    progress = pyqtSignal(int, int)
-    error = pyqtSignal(str)
-
-    def __init__(self, url):
-        super().__init__()
-        self.url = url
-
-    def run(self):
-        try:
-            download_and_install(self.url, progress_callback=self.progress.emit)
-        except Exception as e:
-            self.error.emit(str(e))
 
 class ProgressDialog(QDialog):
     """Simple dialog showing download progress."""
@@ -184,6 +145,8 @@ class SettingsWindow(QMainWindow):
         tabs.addTab(self._build_about_tab(), 'About')
         layout.addWidget(tabs)
 
+        self._fg_timer.timeout.connect(self._update_foreground_apps)
+
 
     def _build_general_tab(self):
         """Build the General settings tab with scrolling support."""
@@ -232,7 +195,8 @@ class SettingsWindow(QMainWindow):
         sg_layout.addWidget(desc)
 
         slider_row = QHBoxLayout()
-        self.sensitivity_slider = NoWheelSlider(Qt.Orientation.Horizontal)
+        self.sensitivity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.sensitivity_slider.wheelEvent = lambda e: e.ignore()
         self.sensitivity_slider.setRange(1, 80)
         self.sensitivity_slider.setTickInterval(5)
         self.sensitivity_slider.setTickPosition(
@@ -297,7 +261,8 @@ class SettingsWindow(QMainWindow):
 
         dur_row = QHBoxLayout()
         dur_row.addWidget(QLabel('Duration (seconds):'))
-        self.suspend_duration_spin = NoWheelSpinBox()
+        self.suspend_duration_spin = QSpinBox()
+        self.suspend_duration_spin.wheelEvent = lambda e: e.ignore()
         self.suspend_duration_spin.setRange(5, 300)
         self.suspend_duration_spin.setValue(60)
         self.suspend_duration_spin.setSuffix(' s')
@@ -380,8 +345,6 @@ class SettingsWindow(QMainWindow):
         self.capture_btn.clicked.connect(self._capture_foreground)
         action_row.addWidget(self.capture_btn)
 
-        self._fg_timer.timeout.connect(self._update_capture_btn)
-
         layout.addLayout(action_row)
         return tab
 
@@ -411,15 +374,9 @@ class SettingsWindow(QMainWindow):
         model_desc.setStyleSheet('color: #6c7086; font-size: 11px;')
         mg_layout.addWidget(model_desc)
 
-        self.model_std_radio = QCheckBox('Standard (Conversational)')
-        self.model_smart_radio = QCheckBox('Smart (IDEs && Custom Apps)')
-        self.model_tech_radio = QCheckBox('Always Technical')
-        
-        self.model_btn_group = QButtonGroup(self)
-        self.model_btn_group.setExclusive(True)
-        self.model_btn_group.addButton(self.model_std_radio)
-        self.model_btn_group.addButton(self.model_smart_radio)
-        self.model_btn_group.addButton(self.model_tech_radio)
+        self.model_std_radio = QRadioButton('Standard (Conversational)')
+        self.model_smart_radio = QRadioButton('Smart (IDEs && Custom Apps)')
+        self.model_tech_radio = QRadioButton('Always Technical')
         
         self.model_std_radio.toggled.connect(lambda checked: checked and self._apply_settings())
         self.model_smart_radio.toggled.connect(lambda checked: checked and self._apply_settings())
@@ -479,8 +436,6 @@ class SettingsWindow(QMainWindow):
         layout.addStretch()
         scroll.setWidget(container)
 
-        self._fg_timer.timeout.connect(self._update_tech_capture_btn)
-
         return scroll
 
     def _build_about_tab(self):
@@ -530,10 +485,12 @@ class SettingsWindow(QMainWindow):
         self.update_btn.setEnabled(False)
         self.update_btn.setText("Checking...")
         self.update_status.setText("")
-        
-        self._update_worker = UpdateWorker()
-        self._update_worker.finished.connect(self._on_update_check_finished)
-        self._update_worker.start()
+
+        def worker():
+            v, url = check_for_updates()
+            QTimer.singleShot(0, lambda: self._on_update_check_finished(v or "", url or ""))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _on_update_check_finished(self, version, url):
         """Handle the result of the update check."""
@@ -560,11 +517,17 @@ class SettingsWindow(QMainWindow):
         """Start downloading the update."""
         self._progress_dialog = ProgressDialog(self)
         self._progress_dialog.show()
-        
-        self._download_worker = DownloadWorker(url)
-        self._download_worker.progress.connect(self._progress_dialog.set_progress)
-        self._download_worker.error.connect(self._on_download_error)
-        self._download_worker.start()
+
+        def on_progress(current, total):
+            QTimer.singleShot(0, lambda: self._progress_dialog.set_progress(current, total))
+
+        def worker():
+            try:
+                download_and_install(url, progress_callback=on_progress)
+            except Exception as e:
+                QTimer.singleShot(0, lambda: self._on_download_error(str(e)))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _on_download_error(self, err_msg):
         """Handle download errors."""
@@ -634,14 +597,8 @@ class SettingsWindow(QMainWindow):
         self.suspend_duration_spin.setValue(data.get('suspend_duration_sec', 60))
         self.suspend_switch_check.setChecked(data.get('suspend_switch_layout', False))
 
-        self.blacklist_widget.clear()
-        for exe in self.blacklist_manager.get_list():
-            self.blacklist_widget.addItem(exe)
-            
-        if hasattr(self, 'tech_apps_widget'):
-            self.tech_apps_widget.clear()
-            for exe in self.blacklist_manager.get_tech_apps_list():
-                self.tech_apps_widget.addItem(exe)
+        self._refresh_blacklist()
+        self._refresh_tech_apps()
 
     def _toggle_startup(self, checked):
         """Toggle the application's launch on startup setting."""
@@ -757,90 +714,30 @@ class SettingsWindow(QMainWindow):
         self._apply_settings()
         self.clearFocus()
 
-    def _save_config(self):
-        """Deprecated: Use _apply_settings instead."""
-        self._apply_settings()
-        self.close()
-
-    def _add_tech_exe(self):
-        """Add a typed exe name to the tech apps list."""
-        exe = self.tech_exe_input.text().strip()
+    def _add_app(self, input_widget, add_fn, refresh_fn):
+        """Generic helper to add an exe name to a manager list."""
+        exe = input_widget.text().strip()
         if exe:
             if not exe.lower().endswith('.exe'):
                 exe += '.exe'
-            self.blacklist_manager.add_tech_app(exe)
-            self._refresh_tech_apps()
-            self.tech_exe_input.clear()
+            add_fn(exe)
+            refresh_fn()
+            input_widget.clear()
 
-    def _remove_tech_exe(self):
-        """Remove the selected exe from the tech apps list."""
-        item = self.tech_apps_widget.currentItem()
+    def _remove_app(self, list_widget, remove_fn, refresh_fn):
+        """Generic helper to remove the selected exe from a manager list."""
+        item = list_widget.currentItem()
         if item:
-            self.blacklist_manager.remove_tech_app(item.text())
-            self._refresh_tech_apps()
-
-    def _update_tech_capture_btn(self):
-        """Update the capture button with the current foreground app for tech apps."""
-        exe = self.blacklist_manager.get_foreground_exe()
-        skip = {'python.exe', 'pythonw.exe', 'switchlang.exe'}
-        if exe and exe not in skip:
-            self._last_tech_exe = exe
-        if hasattr(self, '_last_tech_exe') and self._last_tech_exe:
-            self.tech_capture_btn.setText(
-                f'Add latest foreground App: {self._last_tech_exe}'
-            )
-        else:
-            self.tech_capture_btn.setText('Add latest foreground App')
-
-    def _capture_tech_foreground(self):
-        """Add the last non-SwitchLang foreground app to tech apps."""
-        exe = getattr(self, '_last_tech_exe', None)
-        if exe:
-            self.blacklist_manager.add_tech_app(exe)
-            self._refresh_tech_apps()
-
-    def _refresh_tech_apps(self):
-        """Reload the tech apps widget from the manager."""
-        self.tech_apps_widget.clear()
-        for exe in self.blacklist_manager.get_tech_apps_list():
-            self.tech_apps_widget.addItem(exe)
+            remove_fn(item.text())
+            refresh_fn()
 
     def _add_exe(self):
         """Add a typed exe name to the blacklist."""
-        exe = self.exe_input.text().strip()
-        if exe:
-            if not exe.lower().endswith('.exe'):
-                exe += '.exe'
-            self.blacklist_manager.add(exe)
-            self._refresh_blacklist()
-            self.exe_input.clear()
+        self._add_app(self.exe_input, self.blacklist_manager.add, self._refresh_blacklist)
 
     def _remove_exe(self):
         """Remove the selected exe from the blacklist."""
-        item = self.blacklist_widget.currentItem()
-        if item:
-            self.blacklist_manager.remove(item.text())
-            self._refresh_blacklist()
-
-    def _update_capture_btn(self):
-        """Update the capture button with the current foreground app."""
-        exe = self.blacklist_manager.get_foreground_exe()
-        skip = {'python.exe', 'pythonw.exe', 'switchlang.exe'}
-        if exe and exe not in skip:
-            self._last_external_exe = exe
-        if hasattr(self, '_last_external_exe') and self._last_external_exe:
-            self.capture_btn.setText(
-                f'Blacklist latest foreground App: {self._last_external_exe}'
-            )
-        else:
-            self.capture_btn.setText('Blacklist latest foreground App')
-
-    def _capture_foreground(self):
-        """Blacklist the last non-SwitchLang foreground app."""
-        exe = getattr(self, '_last_external_exe', None)
-        if exe:
-            self.blacklist_manager.add(exe)
-            self._refresh_blacklist()
+        self._remove_app(self.blacklist_widget, self.blacklist_manager.remove, self._refresh_blacklist)
 
     def _refresh_blacklist(self):
         """Reload the blacklist widget from the manager."""
@@ -848,10 +745,51 @@ class SettingsWindow(QMainWindow):
         for exe in self.blacklist_manager.get_list():
             self.blacklist_widget.addItem(exe)
 
+    def _capture_foreground(self):
+        """Blacklist the last non-SwitchLang foreground app."""
+        exe = getattr(self, '_last_foreground_exe', None)
+        if exe:
+            self.blacklist_manager.add(exe)
+            self._refresh_blacklist()
+
+    def _add_tech_exe(self):
+        """Add a typed exe name to the tech apps list."""
+        self._add_app(self.tech_exe_input, self.blacklist_manager.add_tech_app, self._refresh_tech_apps)
+
+    def _remove_tech_exe(self):
+        """Remove the selected exe from the tech apps list."""
+        self._remove_app(self.tech_apps_widget, self.blacklist_manager.remove_tech_app, self._refresh_tech_apps)
+
+    def _refresh_tech_apps(self):
+        """Reload the tech apps widget from the manager."""
+        self.tech_apps_widget.clear()
+        for exe in self.blacklist_manager.get_tech_apps_list():
+            self.tech_apps_widget.addItem(exe)
+
+    def _capture_tech_foreground(self):
+        """Add the last non-SwitchLang foreground app to tech apps."""
+        exe = getattr(self, '_last_foreground_exe', None)
+        if exe:
+            self.blacklist_manager.add_tech_app(exe)
+            self._refresh_tech_apps()
+
+    def _update_foreground_apps(self):
+        """Update capture buttons with the current foreground app."""
+        exe = self.blacklist_manager.get_foreground_exe()
+        if exe and exe not in {'python.exe', 'pythonw.exe', 'switchlang.exe'}:
+            self._last_foreground_exe = exe
+        name = getattr(self, '_last_foreground_exe', None)
+        if name:
+            self.capture_btn.setText(f'Blacklist latest foreground App: {name}')
+            self.tech_capture_btn.setText(f'Add latest foreground App: {name}')
+        else:
+            self.capture_btn.setText('Blacklist latest foreground App')
+            self.tech_capture_btn.setText('Add latest foreground App')
+
     def showEvent(self, event):
         """Start the foreground app polling timer."""
         super().showEvent(event)
-        self._update_capture_btn()
+        self._update_foreground_apps()
         self._fg_timer.start()
 
     def closeEvent(self, event):

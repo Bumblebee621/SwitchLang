@@ -1,11 +1,24 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+production_datas = [
+    ('data/en_quadgrams.marisa', 'data'),
+    ('data/en_quadgrams.meta.json', 'data'),
+    ('data/he_quadgrams.marisa', 'data'),
+    ('data/he_quadgrams.meta.json', 'data'),
+    ('data/so_quadgrams.marisa', 'data'),
+    ('data/so_quadgrams.meta.json', 'data'),
+    ('data/collisions.json', 'data'),
+    ('data/icon.ico', 'data'),
+    ('data/icon.png', 'data'),
+    ('ui/style.qss', 'ui'),
+    ('ui/check.svg', 'ui'),
+]
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('data', 'data'), ('ui', 'ui')],
+    datas=production_datas,
     hiddenimports=['marisa_trie'],
     hookspath=[],
     hooksconfig={},
@@ -35,5 +48,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['data\\icon.ico'],
+    icon=['data/icon.ico'],
 )

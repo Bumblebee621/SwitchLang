@@ -1,10 +1,8 @@
 import codecs
-import os
-import urllib.request
-import re
-import lxml.html
 import html
-from tqdm import tqdm
+import os
+import re
+import urllib.request
 
 def build_clean_corpus_robust(url, output_txt_path, sample_rate=100, target_size_mb=60, max_lines=2000000):
     target_size_bytes = target_size_mb * 1024 * 1024
@@ -12,6 +10,7 @@ def build_clean_corpus_robust(url, output_txt_path, sample_rate=100, target_size
     
     current_size = 0
     current_lines = 0
+    rows_seen = 0
     req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
     response = urllib.request.urlopen(req)
 
@@ -20,13 +19,17 @@ def build_clean_corpus_robust(url, output_txt_path, sample_rate=100, target_size
     # character into U+FFFD and silently corrupt the corpus.
     decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
 
-    pbar = tqdm(unit=' rows', desc="Processing rows")
-    
     # Regex to find complete <row> tags
     row_re = re.compile(r'<row\s+([^>]*?)\s*/?>', re.IGNORECASE)
     id_re = re.compile(r'Id="(\d+)"', re.IGNORECASE)
     text_re = re.compile(r'Text="([^"]*)"', re.IGNORECASE)
-    
+    code_block_re = re.compile(r'<(?:pre|blockquote|code)[^>]*>.*?</(?:pre|blockquote|code)>', re.DOTALL | re.IGNORECASE)
+    tag_re = re.compile(r'<[^>]+>')
+    link_re = re.compile(r'\[([^\]]+)\]\([^\)]+\)')
+    md_style_re = re.compile(r'(\*\*|__|[\*_])')
+    url_re = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+')
+    user_re = re.compile(r'@[\w-]+')
+
     # We'll read in chunks to keep memory low but allow regex to span lines
     chunk_size = 1024 * 1024 # 1MB chunks
     buffer = ""
@@ -58,20 +61,17 @@ def build_clean_corpus_robust(url, output_txt_path, sample_rate=100, target_size
                                 raw_text = html.unescape(raw_text)
                                 
                                 try:
-                                    html_tree = lxml.html.fromstring(f"<div>{raw_text}</div>")
-                                    for tag in html_tree.xpath('.//pre | .//blockquote | .//code'):
-                                        tag.drop_tree()
-                                    clean_text = html_tree.text_content().strip()
+                                    # Strip code/pre blocks and any remaining tags
+                                    stripped = code_block_re.sub('', raw_text)
+                                    clean_text = tag_re.sub('', stripped)
+                                    clean_text = html.unescape(clean_text).strip()
                                     
                                     if clean_text:
-                                        # Handle Markdown
-                                        clean_text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', clean_text)
-                                        clean_text = re.sub(r'(\*\*|__|[\*_])', '', clean_text)
-                                        
-                                        # Remove URLs
-                                        clean_text = re.sub(r'https?://[^\s<>"]+|www\.[^\s<>"]+', '', clean_text)
-                                        # Remove user handles
-                                        clean_text = re.sub(r'@[\w-]+', '', clean_text)
+                                        # Handle Markdown, URLs, and handles
+                                        clean_text = link_re.sub(r'\1', clean_text)
+                                        clean_text = md_style_re.sub('', clean_text)
+                                        clean_text = url_re.sub('', clean_text)
+                                        clean_text = user_re.sub('', clean_text)
                                         
                                         clean_text = " ".join(clean_text.split())
                                         line = clean_text + '\n'
@@ -86,7 +86,9 @@ def build_clean_corpus_robust(url, output_txt_path, sample_rate=100, target_size
                                 except Exception:
                                     pass
                                 
-                        pbar.update(1)
+                        rows_seen += 1
+                        if rows_seen % 50_000 == 0:
+                            print(f"\rRows scanned: {rows_seen:,} | Lines written: {current_lines:,} ({current_size / (1024*1024):.1f} MB)...", end="", flush=True)
                     
                     # Keep everything after the last match in the buffer
                     buffer = buffer[matches[-1].end():]
@@ -97,7 +99,7 @@ def build_clean_corpus_robust(url, output_txt_path, sample_rate=100, target_size
                     
     finally:
         response.close()
-        pbar.close()
+        print()
 
 if __name__ == "__main__":
     # URL discovered from Archive.org virtual directory for stackoverflow.com.7z
