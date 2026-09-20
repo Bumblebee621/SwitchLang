@@ -203,6 +203,11 @@ def main():
     with open(en_path, 'w', encoding='utf-8') as f:
         json.dump(en_data, f, ensure_ascii=False, indent=2)
     logger.info(f"English model saved to: {en_path} (Vocab: {en_data['vocab_size']})")
+    try:
+        from convert_models_to_trie import convert_json_to_trie
+        convert_json_to_trie(en_path)
+    except Exception as e:
+        logger.warning(f"Could not convert English model to trie: {e}")
 
     # Hebrew
     logger.info("Processing Hebrew corpus...")
@@ -211,6 +216,11 @@ def main():
     with open(he_path, 'w', encoding='utf-8') as f:
         json.dump(he_data, f, ensure_ascii=False, indent=2)
     logger.info(f"Hebrew model saved to: {he_path} (Vocab: {he_data['vocab_size']})")
+    try:
+        from convert_models_to_trie import convert_json_to_trie
+        convert_json_to_trie(he_path)
+    except Exception as e:
+        logger.warning(f"Could not convert Hebrew model to trie: {e}")
 
     elapsed = time.time() - start_time
     logger.info(f"Done! Models built in {elapsed:.2f}s.")

@@ -45,9 +45,8 @@ data/fold_counts
 data/technical_mode/
 data/calibration/
 data/combination_exp/
-!data/en_quadgrams.json
-!data/he_quadgrams.json
-!data/so_quadgrams.json
+!data/*_quadgrams.meta.json
+!data/*_quadgrams.marisa
 !data/collisions.json
 !data/icon.ico
 !data/icon.png

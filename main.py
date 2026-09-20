@@ -26,8 +26,8 @@ else:
     BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
     APP_DIR = BUNDLE_DIR
 
-# Keep user data in APPDATA to avoid cluttering the repository
-STORAGE_DIR = os.path.join(os.getenv('APPDATA'), 'SwitchLang')
+# Keep user data in APPDATA (or ~/.config on non-Windows)
+STORAGE_DIR = os.path.join(os.getenv('APPDATA') or os.path.expanduser('~/.config'), 'SwitchLang')
 
 # Ensure storage directory exists
 os.makedirs(STORAGE_DIR, exist_ok=True)
@@ -161,9 +161,9 @@ def load_stylesheet():
 
 
 def check_data_files():
-    """Check that quadgram data files exist. If not, generate them."""
-    en_path = os.path.join(DATA_DIR, 'en_quadgrams.json')
-    he_path = os.path.join(DATA_DIR, 'he_quadgrams.json')
+    """Check that quadgram binary trie data files exist. If not, generate them."""
+    en_path = os.path.join(DATA_DIR, 'en_quadgrams.marisa')
+    he_path = os.path.join(DATA_DIR, 'he_quadgrams.marisa')
 
     if not os.path.exists(en_path) or not os.path.exists(he_path):
         print('Quadgram data files not found. Generating...')

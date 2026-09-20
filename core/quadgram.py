@@ -1,48 +1,39 @@
 """
-quadgram.py — Character-level quadgram language model with Laplace smoothing.
+quadgram.py — Character-level quadgram language model using binary RecordTries.
 
-Loads pre-computed quadgram/trigram/bigram counts from JSON and scores strings
-by computing log-probability under the model.
+Loads pre-computed quadgram/trigram/bigram counts from memory-mapped MARISA tries
+and scores strings by computing log-probability with Laplace smoothing.
 """
 
 import json
 import math
 import os
 import logging
+import marisa_trie
 
 logger = logging.getLogger(__name__)
 
 
 class QuadgramModel:
-    """Character-level quadgram scorer with Laplace (add-1) smoothing."""
+    """Character-level quadgram scorer backed by a memory-mapped RecordTrie."""
 
-    def __init__(self, json_path):
-        """Load quadgram data from a JSON file.
+    def __init__(self, model_path):
+        """Load quadgram data from a .marisa binary trie file."""
+        if not model_path.endswith('.marisa'):
+            base, _ = os.path.splitext(model_path)
+            model_path = f"{base}.marisa"
 
-        Expected JSON structure:
-        {
-            "quadgram_counts": {"abcd": 100, ...},
-            "trigram_counts": {"abc": 500, ...},
-            "bigram_counts": {"ab": 500, ...},
-            "vocab_size": 30
-        }
-        """
-        with open(json_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        self.path = model_path
+        self._trie = marisa_trie.RecordTrie("<I")
+        self._trie.mmap(model_path)
 
-        self.quadgram_counts = data.get('quadgram_counts', {})
-        self.trigram_counts = data.get('trigram_counts', {})
-        self.bigram_counts = data.get('bigram_counts', {})
-        self.vocab_size = data.get('vocab_size', 30)
+        meta_path = model_path[:-7] + '.meta.json'
+        with open(meta_path, 'r', encoding='utf-8') as f:
+            meta = json.load(f)
 
-        # Pre-compute total bigram count across the entire corpus for absolute probabilities
-        self.total_bigrams = sum(self.bigram_counts.values())
-
-        # Pre-compute per-first-character bigram totals for O(1) lookup
-        # Used by the 2-char fallback in score() instead of scanning the whole dict.
-        self._bigram_first_totals = {}
-        for k, c in self.bigram_counts.items():
-            self._bigram_first_totals[k[0]] = self._bigram_first_totals.get(k[0], 0) + c
+        self.vocab_size = meta.get('vocab_size', 30)
+        self.total_bigrams = meta.get('total_bigrams', 0)
+        self._bigram_first_totals = meta.get('bigram_first_totals', {})
 
     def score(self, text):
         """Compute the log-probability score of a string.
@@ -63,35 +54,36 @@ class QuadgramModel:
             return 0.0
 
         text = text.lower()
-        log_prob = 0.0
+        trie = self._trie
         v = self.vocab_size
 
         if len(text) == 2:
-            bigram = text
-            count = self.bigram_counts.get(bigram, 0)
+            res = trie.get(text)
+            count = res[0][0] if res else 0
             total = self._bigram_first_totals.get(text[0], 0)
-            log_prob = math.log((count + 1) / (total + v))
-            return log_prob
+            return math.log((count + 1) / (total + v))
 
         if len(text) == 3:
-            trigram = text
-            bigram = text[:2]
-            tri_count = self.trigram_counts.get(trigram, 0)
-            bi_count = self.bigram_counts.get(bigram, 0)
-            log_prob = math.log((tri_count + 1) / (bi_count + v))
-            return log_prob
+            tri_res = trie.get(text)
+            tri_count = tri_res[0][0] if tri_res else 0
+            bi_res = trie.get(text[:2])
+            bi_count = bi_res[0][0] if bi_res else 0
+            return math.log((tri_count + 1) / (bi_count + v))
 
         # Base the score heavily on the absolute probability of the first bigram
         first_bigram = text[:2]
-        bi_comp_count = self.bigram_counts.get(first_bigram, 0)
+        bi_comp_res = trie.get(first_bigram)
+        bi_comp_count = bi_comp_res[0][0] if bi_comp_res else 0
         log_prob = math.log((bi_comp_count + 1) / (self.total_bigrams + (v ** 2)))
 
         for i in range(len(text) - 3):
             quadgram = text[i:i + 4]
             trigram = text[i:i + 3]
 
-            quad_count = self.quadgram_counts.get(quadgram, 0)
-            tri_count = self.trigram_counts.get(trigram, 0)
+            q_res = trie.get(quadgram)
+            quad_count = q_res[0][0] if q_res else 0
+            t_res = trie.get(trigram)
+            tri_count = t_res[0][0] if t_res else 0
 
             prob = (quad_count + 1) / (tri_count + v)
             log_prob += math.log(prob)
@@ -114,16 +106,16 @@ class QuadgramModel:
         if len(prev3) < 3:
             return 0.0
 
-        prev3 = prev3[-3:].lower()
-        new_char = new_char.lower()
+        quadgram = (prev3[-3:] + new_char).lower()
+        trigram = prev3[-3:].lower()
 
-        quadgram = prev3 + new_char
-        trigram = prev3
+        trie = self._trie
+        q_res = trie.get(quadgram)
+        quad_count = q_res[0][0] if q_res else 0
+        t_res = trie.get(trigram)
+        tri_count = t_res[0][0] if t_res else 0
 
-        quad_count = self.quadgram_counts.get(quadgram, 0)
-        tri_count = self.trigram_counts.get(trigram, 0)
         v = self.vocab_size
-
         return math.log((quad_count + 1) / (tri_count + v))
 
 
@@ -137,19 +129,16 @@ def load_models(data_dir, load_so=False):
     Returns:
         Dict of {name: QuadgramModel} instances.
     """
-    en_path = os.path.join(data_dir, 'en_quadgrams.json')
-    he_path = os.path.join(data_dir, 'he_quadgrams.json')
-    
     models = {
-        'en': QuadgramModel(en_path),
-        'he': QuadgramModel(he_path)
+        'en': QuadgramModel(os.path.join(data_dir, 'en_quadgrams.marisa')),
+        'he': QuadgramModel(os.path.join(data_dir, 'he_quadgrams.marisa'))
     }
-    
+
     if load_so:
-        so_path = os.path.join(data_dir, 'so_quadgrams.json')
+        so_path = os.path.join(data_dir, 'so_quadgrams.marisa')
         if os.path.exists(so_path):
             models['so'] = QuadgramModel(so_path)
         else:
-            logger.warning('so_quadgrams.json not found — technical mode will fall back to standard')
-            
+            logger.warning('so_quadgrams.marisa not found — technical mode will fall back to standard')
+
     return models

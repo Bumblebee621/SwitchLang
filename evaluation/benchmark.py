@@ -1030,7 +1030,7 @@ def main():
 
     # ── run tests ──
     model_override = args.en_model if args.lang == 'en' else args.he_model
-    model_path = model_override if model_override else os.path.join(args.data_dir, f'{args.lang}_quadgrams.json')
+    model_path = model_override if model_override else os.path.join(args.data_dir, f'{args.lang}_quadgrams.marisa')
     corpus_path = args.text_file
 
     common = dict(data_dir=args.data_dir, en_model_path=args.en_model,
