@@ -33,7 +33,8 @@ def main():
     data_dir = os.path.join(project_dir, 'data')
     
     so_txt_path = os.path.join(data_dir, 'stack_overflow_comments.txt')
-    output_path = os.path.join(data_dir, 'so_quadgrams.json')
+    so_trie_path = os.path.join(data_dir, 'so_quadgrams.marisa')
+    so_meta_path = os.path.join(data_dir, 'so_quadgrams.meta.json')
     
     start_time = time.time()
     
@@ -41,9 +42,9 @@ def main():
     so_data = build_so_quadgrams(so_txt_path)
     
     if so_data:
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(so_data, f, ensure_ascii=False, indent=2)
-        logger.info(f"SO model saved to: {output_path} (Vocab: {so_data['vocab_size']})")
+        from convert_models_to_trie import save_model_data_to_trie
+        save_model_data_to_trie(so_data, so_trie_path, so_meta_path)
+        logger.info(f"SO model saved to: {so_trie_path} (Vocab: {so_data['vocab_size']})")
         
         elapsed = time.time() - start_time
         logger.info(f"Done! SO Model built in {elapsed:.2f}s.")

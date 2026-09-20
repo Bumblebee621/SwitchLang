@@ -196,31 +196,23 @@ def main():
 
     start_time = time.time()
 
+    from convert_models_to_trie import save_model_data_to_trie
+
     # English
     logger.info("Processing English corpus...")
     en_data = build_quadgrams_from_file_parallel(en_txt_path, allowed_chars=ALLOWED_EN)
-    en_path = os.path.join(data_dir, 'en_quadgrams.json')
-    with open(en_path, 'w', encoding='utf-8') as f:
-        json.dump(en_data, f, ensure_ascii=False, indent=2)
-    logger.info(f"English model saved to: {en_path} (Vocab: {en_data['vocab_size']})")
-    try:
-        from convert_models_to_trie import convert_json_to_trie
-        convert_json_to_trie(en_path)
-    except Exception as e:
-        logger.warning(f"Could not convert English model to trie: {e}")
+    en_trie_path = os.path.join(data_dir, 'en_quadgrams.marisa')
+    en_meta_path = os.path.join(data_dir, 'en_quadgrams.meta.json')
+    save_model_data_to_trie(en_data, en_trie_path, en_meta_path)
+    logger.info(f"English model saved to: {en_trie_path} (Vocab: {en_data['vocab_size']})")
 
     # Hebrew
     logger.info("Processing Hebrew corpus...")
     he_data = build_quadgrams_from_file_parallel(he_txt_path, allowed_chars=ALLOWED_HE)
-    he_path = os.path.join(data_dir, 'he_quadgrams.json')
-    with open(he_path, 'w', encoding='utf-8') as f:
-        json.dump(he_data, f, ensure_ascii=False, indent=2)
-    logger.info(f"Hebrew model saved to: {he_path} (Vocab: {he_data['vocab_size']})")
-    try:
-        from convert_models_to_trie import convert_json_to_trie
-        convert_json_to_trie(he_path)
-    except Exception as e:
-        logger.warning(f"Could not convert Hebrew model to trie: {e}")
+    he_trie_path = os.path.join(data_dir, 'he_quadgrams.marisa')
+    he_meta_path = os.path.join(data_dir, 'he_quadgrams.meta.json')
+    save_model_data_to_trie(he_data, he_trie_path, he_meta_path)
+    logger.info(f"Hebrew model saved to: {he_trie_path} (Vocab: {he_data['vocab_size']})")
 
     elapsed = time.time() - start_time
     logger.info(f"Done! Models built in {elapsed:.2f}s.")

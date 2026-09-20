@@ -22,20 +22,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 
-def convert_json_to_trie(json_path, output_trie_path=None, output_meta_path=None):
-    """Convert a single quadgram JSON file to .marisa and .meta.json files."""
-    if not os.path.exists(json_path):
-        logger.error(f"Input file not found: {json_path}")
-        return False
-
-    base, _ = os.path.splitext(json_path)
-    output_trie_path = output_trie_path or f"{base}.marisa"
-    output_meta_path = output_meta_path or f"{base}.meta.json"
-
-    logger.info(f"Loading {json_path}...")
-    with open(json_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-
+def save_model_data_to_trie(data, output_trie_path, output_meta_path):
+    """Save in-memory quadgram model data dict directly to .marisa and .meta.json."""
     quadgram_counts = data.get('quadgram_counts', {})
     trigram_counts = data.get('trigram_counts', {})
     bigram_counts = data.get('bigram_counts', {})
@@ -48,6 +36,7 @@ def convert_json_to_trie(json_path, output_trie_path=None, output_meta_path=None
         if k:
             first_char = k[0]
             bigram_first_totals[first_char] = bigram_first_totals.get(first_char, 0) + c
+    bigram_first_totals = dict(sorted(bigram_first_totals.items()))
 
     # Build list of (ngram, (count,)) for RecordTrie
     logger.info(f"Packing {len(quadgram_counts)} quads, {len(trigram_counts)} tris, {len(bigram_counts)} bis...")
@@ -80,12 +69,27 @@ def convert_json_to_trie(json_path, output_trie_path=None, output_meta_path=None
     with open(output_meta_path, 'w', encoding='utf-8') as f:
         json.dump(metadata, f, indent=2, ensure_ascii=False)
 
-    orig_size = os.path.getsize(json_path) / (1024 * 1024)
     trie_size = os.path.getsize(output_trie_path) / (1024 * 1024)
     meta_size = os.path.getsize(output_meta_path) / 1024
-
-    logger.info(f"Done! Original JSON: {orig_size:.2f} MB -> Trie: {trie_size:.2f} MB + Meta: {meta_size:.1f} KB (saved {(1 - trie_size/orig_size)*100:.1f}%)")
+    logger.info(f"Done! Trie: {trie_size:.2f} MB, Meta: {meta_size:.1f} KB")
     return True
+
+
+def convert_json_to_trie(json_path, output_trie_path=None, output_meta_path=None):
+    """Convert a single quadgram JSON file to .marisa and .meta.json files."""
+    if not os.path.exists(json_path):
+        logger.error(f"Input file not found: {json_path}")
+        return False
+
+    base, _ = os.path.splitext(json_path)
+    output_trie_path = output_trie_path or f"{base}.marisa"
+    output_meta_path = output_meta_path or f"{base}.meta.json"
+
+    logger.info(f"Loading {json_path}...")
+    with open(json_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    return save_model_data_to_trie(data, output_trie_path, output_meta_path)
 
 
 def convert_all(data_dir):
