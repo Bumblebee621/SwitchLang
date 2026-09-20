@@ -6,7 +6,6 @@ as a continuous sentence lengthens. CREs reset Δ to baseline.
 """
 
 import logging
-import math
 import time
 
 logger = logging.getLogger('switchlang.sensitivity')

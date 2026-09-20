@@ -56,7 +56,7 @@ Run the following commands in your terminal (Command Prompt or PowerShell):
 python -m venv .venv
 .venv\Scripts\activate
 
-# 2. Install dependencies
+# 2. Install dependencies (use requirements-dev.txt to rebuild models from scratch)
 pip install -r requirements.txt
 
 # 3. Generate the language models

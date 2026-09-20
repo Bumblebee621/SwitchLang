@@ -105,12 +105,3 @@ class SuspensionOSD(QWidget):
         self.opacity_anim.setEndValue(0.0)
         self.opacity_anim.finished.connect(self.hide)
         self.opacity_anim.start()
-
-# Helper instance check (Singleton style for app-wide use)
-_instance = None
-
-def show_osd(title, message, duration=1500):
-    global _instance
-    if _instance is None:
-        _instance = SuspensionOSD()
-    _instance.show_status(title, message, duration)

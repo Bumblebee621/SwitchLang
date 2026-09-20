@@ -141,34 +141,19 @@ def toggle_caps_lock():
     _send_inputs(inputs)
 
 
-def send_vk_key(vk):
-    """Send a single virtual key press (down + up) as a real VK event.
-
-    Unlike send_unicode_string, this sends the key using its virtual key code,
-    so apps that listen for specific VK events (like Discord listening for
-    VK_RETURN to send a message) will recognise it.
-    """
-    inputs = [
-        _make_key_input(vk=vk),
-        _make_key_input(vk=vk, flags=KEYEVENTF_KEYUP),
-    ]
-    _send_inputs(inputs)
-
-
-def send_vk_key_with_modifiers(vk, shift=False):
-    """Send a single virtual key press with optional modifiers."""
+def send_vk_key(vk, shift=False):
+    """Send a single virtual key press (down + up) as a real VK event with optional modifiers."""
     inputs = []
     if shift:
         inputs.append(_make_key_input(vk=VK_SHIFT))
-    
     inputs.append(_make_key_input(vk=vk))
     inputs.append(_make_key_input(vk=vk, flags=KEYEVENTF_KEYUP))
-    
     if shift:
         inputs.append(_make_key_input(vk=VK_SHIFT, flags=KEYEVENTF_KEYUP))
-        
-    if inputs:
-        _send_inputs(inputs)
+    _send_inputs(inputs)
+
+
+send_vk_key_with_modifiers = send_vk_key
 
 
 def send_string_as_keys(text, layout):
@@ -249,6 +234,16 @@ def _resolve_hkls():
         if not _cached_hkl_he and primary_lang == 0x0D:
             _cached_hkl_he = hkl
 
+def _get_active_thread_id(hwnd):
+    """Retrieve thread ID of the focused control or fallback to hwnd."""
+    gui_info = GUITHREADINFO(cbSize=ctypes.sizeof(GUITHREADINFO))
+    if user32.GetGUIThreadInfo(0, ctypes.byref(gui_info)) and gui_info.hwndFocus:
+        tid = user32.GetWindowThreadProcessId(gui_info.hwndFocus, None)
+        if tid:
+            return tid
+    return user32.GetWindowThreadProcessId(hwnd, None) if hwnd else 0
+
+
 def toggle_layout(target_layout):
     """Toggle the OS keyboard layout for the foreground window and wait.
 
@@ -269,14 +264,7 @@ def toggle_layout(target_layout):
     user32.PostMessageW(hwnd, WM_INPUTLANGCHANGEREQUEST, 0, hkl)
     
     # Wait for the layout to actually change to prevent race conditions
-    # We check the thread of the focused component if possible, as it's the priority
-    gui_info = GUITHREADINFO(cbSize=ctypes.sizeof(GUITHREADINFO))
-    thread_id = 0
-    if user32.GetGUIThreadInfo(0, ctypes.byref(gui_info)) and gui_info.hwndFocus:
-        thread_id = user32.GetWindowThreadProcessId(gui_info.hwndFocus, None)
-    
-    if not thread_id:
-        thread_id = user32.GetWindowThreadProcessId(hwnd, None)
+    thread_id = _get_active_thread_id(hwnd)
 
     expected_primary = 0x09 if target_layout == 'en' else 0x0D
     
@@ -300,14 +288,7 @@ def get_current_layout():
     if not hwnd:
         return 'unknown'
 
-    # Try to get the focused window thread for accurate layout in modern apps
-    gui_info = GUITHREADINFO(cbSize=ctypes.sizeof(GUITHREADINFO))
-    thread_id = 0
-    if user32.GetGUIThreadInfo(0, ctypes.byref(gui_info)) and gui_info.hwndFocus:
-        thread_id = user32.GetWindowThreadProcessId(gui_info.hwndFocus, None)
-    
-    if not thread_id:
-        thread_id = user32.GetWindowThreadProcessId(hwnd, None)
+    thread_id = _get_active_thread_id(hwnd)
 
     hkl = user32.GetKeyboardLayout(thread_id)
     lang_id = hkl & 0xFFFF

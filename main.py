@@ -57,7 +57,7 @@ logger = logging.getLogger('switchlang')
 def set_debug_mode(enabled):
     """Toggle expressive logging (file + DEBUG level) on or off.
 
-    When *enabled* is True, attaches a LineRotatingFileHandler to the root
+    When *enabled* is True, attaches a RotatingFileHandler to the root
     logger and drops every ``switchlang.*`` logger to DEBUG.  When False,
     removes the file handler and restores WARNING level so the app stays
     completely silent on disk.

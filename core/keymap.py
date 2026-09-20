@@ -33,18 +33,9 @@ EN_TO_HE_SHIFT = {
     ':': ':',  '"': '"',
 }
 
-# Build the full EN→HE map (merged)
-EN_TO_HE_FULL = {}
-EN_TO_HE_FULL.update(EN_TO_HE)
-EN_TO_HE_FULL.update(EN_TO_HE_SHIFT)
-
-# Build reverse map: HE→EN
-HE_TO_EN = {v: k for k, v in EN_TO_HE.items()}
-HE_TO_EN_SHIFT = {v: k for k, v in EN_TO_HE_SHIFT.items()}
-
-HE_TO_EN_FULL = {}
-HE_TO_EN_FULL.update(HE_TO_EN)
-HE_TO_EN_FULL.update(HE_TO_EN_SHIFT)
+# Build full EN↔HE maps (merged unshifted and shifted)
+EN_TO_HE_FULL = EN_TO_HE | EN_TO_HE_SHIFT
+HE_TO_EN_FULL = {v: k for k, v in EN_TO_HE_FULL.items()}
 
 # Virtual key code to character mapping for scan-code based lookup
 # Maps VK codes to (en_char, he_char) for unshifted state

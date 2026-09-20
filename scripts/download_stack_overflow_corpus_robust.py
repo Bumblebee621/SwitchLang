@@ -1,5 +1,5 @@
 import os
-import requests
+import urllib.request
 import re
 import lxml.html
 import html
@@ -11,10 +11,8 @@ def build_clean_corpus_robust(url, output_txt_path, sample_rate=100, target_size
     
     current_size = 0
     current_lines = 0
-    response = requests.get(url, stream=True)
-    if response.status_code != 200:
-        print(f"Error: {response.status_code}")
-        return
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+    response = urllib.request.urlopen(req)
 
     pbar = tqdm(unit=' rows', desc="Processing rows")
     
@@ -29,10 +27,11 @@ def build_clean_corpus_robust(url, output_txt_path, sample_rate=100, target_size
     
     try:
         with open(output_txt_path, 'w', encoding='utf-8') as out_file:
-            for chunk in response.iter_content(chunk_size=chunk_size, decode_unicode=True):
-                if not chunk:
+            while True:
+                chunk_bytes = response.read(chunk_size)
+                if not chunk_bytes:
                     break
-                    
+                chunk = chunk_bytes.decode('utf-8', errors='replace')
                 buffer += chunk
                 
                 # Find all <row ...> tokens

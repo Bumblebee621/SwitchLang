@@ -150,10 +150,8 @@ class EvaluationHarness:
             return 0.0
         quadgram = (prev3[-3:] + new_char).lower()
         trigram = prev3[-3:].lower()
-        q_res = model._trie.get(quadgram)
-        quad_count = q_res[0][0] if q_res else 0
-        t_res = model._trie.get(trigram)
-        tri_count = t_res[0][0] if t_res else 0
+        quad_count = model.count(quadgram)
+        tri_count = model.count(trigram)
         return math.log((quad_count + 1) / (tri_count + model.vocab_size))
 
     def _score_incremental_detailed(self, state, prev3, new_char, layout):
@@ -315,7 +313,7 @@ class EvaluationHarness:
     def benchmark_scoring_comparison(self, lines, text_lang, baseline_delta=3.5, max_words=None):
         """Benchmark full rescoring vs incremental scoring head-to-head on identical keystrokes."""
         print(f"\n" + "=" * 80)
-        print(f" SCORING BENCHMARK: Full Rescoring (Current) vs Incremental (score_incremental)")
+        print(f" SCORING BENCHMARK: Full Rescoring (Current) vs Incremental Scoring")
         print(f"=" * 80)
         print(f"Language: {text_lang.upper()} | Model mode: {self.engine.model_mode} | Delta: {baseline_delta}")
         print(f"Extracting words from {len(lines):,} lines...")

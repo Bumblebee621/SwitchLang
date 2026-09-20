@@ -37,6 +37,10 @@ user32 = ctypes.windll.user32
 user32.GetForegroundWindow.restype = wintypes.HWND
 user32.GetKeyboardLayout.restype = wintypes.HKL
 
+kernel32 = ctypes.windll.kernel32
+kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+
 # Hook constants
 WH_KEYBOARD_LL = 13
 WH_MOUSE_LL = 14
@@ -122,6 +126,16 @@ _user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
 _user32.PostThreadMessageW.argtypes = [
     wintypes.DWORD, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM
 ]
+_user32.PostThreadMessageW.restype = wintypes.BOOL
+
+
+def _post_quit(thread_id, max_retries=10, delay=0.05):
+    """Post WM_QUIT to a thread message queue, retrying if the queue isn't created yet."""
+    for _ in range(max_retries):
+        if _user32.PostThreadMessageW(thread_id, WM_QUIT, 0, 0):
+            return True
+        time.sleep(delay)
+    return False
 
 
 class KBDLLHOOKSTRUCT(ctypes.Structure):
@@ -133,7 +147,6 @@ class KBDLLHOOKSTRUCT(ctypes.Structure):
         ('time', wintypes.DWORD),
         ('dwExtraInfo', ctypes.POINTER(ctypes.c_ulong)),
     ]
-
 
 
 _user32.GetGUIThreadInfo.argtypes = [wintypes.DWORD, ctypes.POINTER(GUITHREADINFO)]
@@ -370,6 +383,24 @@ class HookManager:
             )
         return block
 
+    def _evaluate_current(self, effective_layout, on_delimiter=False):
+        """Evaluate current buffers and log decision details."""
+        eff_mode = 'technical' if (self.model_mode == 'smart' and self._cached_is_ide_editor) else self.model_mode
+        should_switch, diff, is_colliding, is_ambiguous = self.engine.evaluate(
+            self.buffer_active,
+            self.buffer_shadow,
+            self.sensitivity.delta,
+            current_layout=effective_layout,
+            on_delimiter=on_delimiter,
+            mode=eff_mode
+        )
+        logger.debug(
+            'EVAL: "%s" (%s/%s) -> "%s" | diff=%+.2f vs delta=%.2f | switch=%s | colliding=%s | ambiguous=%s',
+            self.buffer_active, self._cached_layout, effective_layout, self.buffer_shadow, diff,
+            self.sensitivity.delta, should_switch, is_colliding, is_ambiguous
+        )
+        return should_switch, diff, is_colliding, is_ambiguous
+
     # -------------------------------------------------------------------------
     # PIPELINE CORE: HANDLE KEYPRESS
     # -------------------------------------------------------------------------
@@ -457,24 +488,8 @@ class HookManager:
                 caps_lock = _is_caps_lock_on()
                 effective_layout = 'en' if (current == 'he' and caps_lock) else current
 
-                # Determine effective evaluation mode
-                eff_mode = self.model_mode
-                if eff_mode == 'smart':
-                    eff_mode = 'technical' if self._cached_is_ide_editor else 'standard'
-
-                should_switch, diff, is_colliding, is_ambiguous = self.engine.evaluate(
-                    self.buffer_active,
-                    self.buffer_shadow,
-                    self.sensitivity.delta,
-                    current_layout=effective_layout,
-                    on_delimiter=True,
-                    mode=eff_mode
-                )
-                
-                logger.debug(
-                    'EVAL: "%s" (%s/%s) -> "%s" | diff=%+.2f vs delta=%.2f | switch=%s | colliding=%s | ambiguous=%s',
-                    self.buffer_active, current, effective_layout, self.buffer_shadow, diff,
-                    self.sensitivity.delta, should_switch, is_colliding, is_ambiguous
+                should_switch, diff, is_colliding, is_ambiguous = self._evaluate_current(
+                    effective_layout, on_delimiter=True
                 )
 
                 if should_switch:
@@ -523,23 +538,9 @@ class HookManager:
 
         # Only run mid-word scoring after 3+ characters to avoid false switches.
         if len(self.buffer_active) >= 3:
-            # Determine effective evaluation mode
-            eff_mode = self.model_mode
-            if eff_mode == 'smart':
-                eff_mode = 'technical' if self._cached_is_ide_editor else 'standard'
-
-            should_switch, diff, is_colliding, is_ambiguous = self.engine.evaluate(
-                self.buffer_active,
-                self.buffer_shadow,
-                self.sensitivity.delta,
-                current_layout=effective_layout,
-                mode=eff_mode
+            should_switch, diff, is_colliding, is_ambiguous = self._evaluate_current(
+                effective_layout, on_delimiter=False
             )
-            logger.debug(
-                    'EVAL: "%s" (%s/%s) -> "%s" | diff=%+.2f vs delta=%.2f | switch=%s | colliding=%s | ambiguous=%s',
-                    self.buffer_active, current, effective_layout, self.buffer_shadow, diff,
-                    self.sensitivity.delta, should_switch, is_colliding, is_ambiguous
-                )
 
             if should_switch:
                 self._consecutive_midword_hits += 1
@@ -740,10 +741,6 @@ class HookManager:
     def _hook_thread_func(self):
         """Thread worker that installs the hook and maintains the Windows message pump."""
         self._hook_proc = HOOKPROC(self._kb_hook_callback)
-
-        kernel32 = ctypes.windll.kernel32
-        kernel32.GetModuleHandleW.restype = wintypes.HMODULE
-        kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
         h_mod = kernel32.GetModuleHandleW(None)
 
         self._hook_id = _user32.SetWindowsHookExW(
@@ -792,10 +789,6 @@ class HookManager:
     def _mouse_thread_func(self):
         """Thread worker that installs the mouse hook and maintains a Windows message pump."""
         self._mouse_hook_proc = HOOKPROC(self._mouse_hook_callback)
-
-        kernel32 = ctypes.windll.kernel32
-        kernel32.GetModuleHandleW.restype = wintypes.HMODULE
-        kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
         h_mod = kernel32.GetModuleHandleW(None)
 
         self._mouse_hook_id = _user32.SetWindowsHookExW(
@@ -861,7 +854,6 @@ class HookManager:
                 if self.sensitivity.check_window_change(hwnd):
                     self._fire_cre('window_change')
 
-
                 # 4. Check for Idle Timeout (Trigger CRE)
                 if self.enabled and self.sensitivity.check_idle_timeout(self.idle_timeout):
                     self._fire_cre('idle_timeout')
@@ -910,20 +902,10 @@ class HookManager:
         self._running = False
 
         if self._hook_thread and self._hook_thread.ident:
-            # Send WM_QUIT to the hook thread's message pump
-            _user32.PostThreadMessageW(
-                self._hook_thread.ident,
-                WM_QUIT,
-                0, 0
-            )
+            _post_quit(self._hook_thread.ident)
 
         if self._mouse_thread and self._mouse_thread.ident:
-            # Send WM_QUIT to the mouse hook thread's message pump
-            _user32.PostThreadMessageW(
-                self._mouse_thread.ident,
-                WM_QUIT,
-                0, 0
-            )
+            _post_quit(self._mouse_thread.ident)
 
         if self._hook_thread and self._hook_thread.is_alive():
             self._hook_thread.join(timeout=2.0)

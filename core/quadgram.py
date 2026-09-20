@@ -35,6 +35,11 @@ class QuadgramModel:
         self.total_bigrams = meta.get('total_bigrams', 0)
         self._bigram_first_totals = meta.get('bigram_first_totals', {})
 
+    def count(self, ngram):
+        """Retrieve frequency count of an n-gram from the underlying trie."""
+        res = self._trie.get(ngram)
+        return res[0][0] if res else 0
+
     def score(self, text):
         """Compute the log-probability score of a string.
 
@@ -54,36 +59,29 @@ class QuadgramModel:
             return 0.0
 
         text = text.lower()
-        trie = self._trie
         v = self.vocab_size
 
         if len(text) == 2:
-            res = trie.get(text)
-            count = res[0][0] if res else 0
+            count = self.count(text)
             total = self._bigram_first_totals.get(text[0], 0)
             return math.log((count + 1) / (total + v))
 
         if len(text) == 3:
-            tri_res = trie.get(text)
-            tri_count = tri_res[0][0] if tri_res else 0
-            bi_res = trie.get(text[:2])
-            bi_count = bi_res[0][0] if bi_res else 0
+            tri_count = self.count(text)
+            bi_count = self.count(text[:2])
             return math.log((tri_count + 1) / (bi_count + v))
 
         # Base the score heavily on the absolute probability of the first bigram
         first_bigram = text[:2]
-        bi_comp_res = trie.get(first_bigram)
-        bi_comp_count = bi_comp_res[0][0] if bi_comp_res else 0
+        bi_comp_count = self.count(first_bigram)
         log_prob = math.log((bi_comp_count + 1) / (self.total_bigrams + (v ** 2)))
 
         for i in range(len(text) - 3):
             quadgram = text[i:i + 4]
             trigram = text[i:i + 3]
 
-            q_res = trie.get(quadgram)
-            quad_count = q_res[0][0] if q_res else 0
-            t_res = trie.get(trigram)
-            tri_count = t_res[0][0] if t_res else 0
+            quad_count = self.count(quadgram)
+            tri_count = self.count(trigram)
 
             prob = (quad_count + 1) / (tri_count + v)
             log_prob += math.log(prob)

@@ -13,7 +13,6 @@ import os
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
-psapi = ctypes.windll.psapi
 
 logger = logging.getLogger('switchlang.blacklist')
 
