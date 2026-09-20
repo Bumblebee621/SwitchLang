@@ -3,6 +3,7 @@ Script to build quadgram language models from text corpora.
 Processes large text files in parallel, extracting bigram, trigram, and quadgram
 frequencies, and saves them as JSON models used by the SwitchLang engine.
 """
+import argparse
 import json
 import os
 import sys
@@ -232,20 +233,41 @@ def main():
     """
     Main entry point for the quadgram building script.
     
-    Ensures corpora are downloaded, triggers the parallel processing for both 
-    English and Hebrew text files, and saves the resulting models directly to .marisa.
+    The built models ship with the repository, so this is a no-op unless they
+    are missing or --force is given. When a build is needed, the corpora are
+    downloaded first if absent, then processed in parallel for both English
+    and Hebrew and saved directly to .marisa.
     """
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        '--force', action='store_true',
+        help='Rebuild the models even if they already exist.'
+    )
+    args = parser.parse_args()
+
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_dir = os.path.dirname(script_dir)
     data_dir = os.path.join(project_dir, 'data')
     os.makedirs(data_dir, exist_ok=True)
-    
+
+    en_trie_path = os.path.join(data_dir, 'en_quadgrams.marisa')
+    en_meta_path = os.path.join(data_dir, 'en_quadgrams.meta.json')
+    he_trie_path = os.path.join(data_dir, 'he_quadgrams.marisa')
+    he_meta_path = os.path.join(data_dir, 'he_quadgrams.meta.json')
+
+    # The models are committed, so a fresh clone has nothing to build and no
+    # reason to pull down several GB of corpora.
+    if not args.force and all(os.path.exists(p) for p in
+                              (en_trie_path, en_meta_path, he_trie_path, he_meta_path)):
+        logger.info(f"Models already present in {data_dir} — nothing to build.")
+        logger.info("Re-run with --force to rebuild them from the corpora.")
+        return
+
     en_txt_path = os.path.join(data_dir, 'en_corpus.txt')
     he_txt_path = os.path.join(data_dir, 'he_corpus.txt')
-    
+
     if not os.path.exists(en_txt_path) or not os.path.exists(he_txt_path):
-        logger.error("Corpora text files not found!")
-        logger.info("Downloading corpora...")
+        logger.info("Corpora text files not found — downloading...")
         import download_corpora  # imports `datasets`, only needed for a download
         download_corpora.main()
 
@@ -254,16 +276,12 @@ def main():
     # English
     logger.info("Processing English corpus...")
     en_data = build_quadgrams_from_file_parallel(en_txt_path, allowed_chars=ALLOWED_EN)
-    en_trie_path = os.path.join(data_dir, 'en_quadgrams.marisa')
-    en_meta_path = os.path.join(data_dir, 'en_quadgrams.meta.json')
     save_model_data_to_trie(en_data, en_trie_path, en_meta_path)
     logger.info(f"English model saved to: {en_trie_path} (Vocab: {en_data['vocab_size']})")
 
     # Hebrew
     logger.info("Processing Hebrew corpus...")
     he_data = build_quadgrams_from_file_parallel(he_txt_path, allowed_chars=ALLOWED_HE)
-    he_trie_path = os.path.join(data_dir, 'he_quadgrams.marisa')
-    he_meta_path = os.path.join(data_dir, 'he_quadgrams.meta.json')
     save_model_data_to_trie(he_data, he_trie_path, he_meta_path)
     logger.info(f"Hebrew model saved to: {he_trie_path} (Vocab: {he_data['vocab_size']})")
 
