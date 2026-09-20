@@ -160,6 +160,7 @@ class EvaluationHarness:
         buf_active, buf_shadow = self._get_buffers(word, text_lang, current_layout)
 
         # --- mid-word evaluation (after each char, starting at length 3) ---
+        consecutive_hits = 0
         for i in range(2, len(buf_active)):
             partial_a = buf_active[:i + 1]
             partial_s = buf_shadow[:i + 1]
@@ -168,11 +169,15 @@ class EvaluationHarness:
                 current_layout=current_layout,
             )
             if should:
-                return WordResult(
-                    word=word, buffer_active=buf_active, buffer_shadow=buf_shadow,
-                    switched=True, switch_char_idx=i,
-                    score_diff=diff, is_colliding=coll, is_ambiguous=amb,
-                )
+                consecutive_hits += 1
+                if consecutive_hits >= 2:
+                    return WordResult(
+                        word=word, buffer_active=buf_active, buffer_shadow=buf_shadow,
+                        switched=True, switch_char_idx=i,
+                        score_diff=diff, is_colliding=coll, is_ambiguous=amb,
+                    )
+            else:
+                consecutive_hits = 0
 
         # --- delimiter evaluation ---
         should, diff, coll, amb = self.engine.evaluate(
@@ -201,7 +206,7 @@ class EvaluationHarness:
     # FALSE-POSITIVE TEST
     # ------------------------------------------------------------------
 
-    def test_false_positives(self, lines, text_lang, baseline_delta=4.0,
+    def test_false_positives(self, lines, text_lang, baseline_delta=3.5,
                              line_offset=0, progress=True):
         """Feed *valid* text on the *correct* layout.  Any switch = FP."""
         report = FPReport(lang=text_lang)
@@ -273,7 +278,7 @@ class EvaluationHarness:
     # FALSE-NEGATIVE TEST
     # ------------------------------------------------------------------
 
-    def test_false_negatives(self, lines, text_lang, baseline_delta=4.0,
+    def test_false_negatives(self, lines, text_lang, baseline_delta=3.5,
                              line_offset=0, progress=True):
         """Feed *inverted* text (wrong layout).  Failure to switch = FN.
 
@@ -588,7 +593,7 @@ def main():
         help='Max non-empty lines to process (default: entire file).',
     )
     parser.add_argument(
-        '--baseline-delta', type=float, default=4.0,
+        '--baseline-delta', type=float, default=3.5,
         help='Initial score delta threshold (default: 4.0).',
     )
     parser.add_argument(

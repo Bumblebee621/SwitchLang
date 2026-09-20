@@ -208,6 +208,7 @@ class HookManager:
         # Buffers for the current partial word
         self.buffer_active = ''  # What shows on screen right now
         self.buffer_shadow = ''  # The same keys translated to the other layout
+        self._consecutive_midword_hits = 0  # K=2 consecutive mid-word confirmation counter
 
         # Lookback queue: stores _WordEntry items for completed words in the
         # current session. Used for "Retroactive Correction" of ambiguous words.
@@ -340,6 +341,7 @@ class HookManager:
         """Clear the current word buffers (usually on word completion or CRE)."""
         self.buffer_active = ''
         self.buffer_shadow = ''
+        self._consecutive_midword_hits = 0
 
     def _clear_history(self):
         """Clear the lookback history.
@@ -429,6 +431,7 @@ class HookManager:
 
         # 3. Handle Backspace (undo last buffer entry)
         if vk_code == VK_BACK:
+            self._consecutive_midword_hits = 0
             if self.buffer_active:
                 self.buffer_active = self.buffer_active[:-1]
                 self.buffer_shadow = self.buffer_shadow[:-1]
@@ -545,9 +548,13 @@ class HookManager:
                 )
 
             if should_switch:
-                is_caps_fix = (current == 'he' and caps_lock)
-                if self._trigger_switch(caps_fix=is_caps_fix):
-                    return True
+                self._consecutive_midword_hits += 1
+                if self._consecutive_midword_hits >= 2:
+                    is_caps_fix = (current == 'he' and caps_lock)
+                    if self._trigger_switch(caps_fix=is_caps_fix):
+                        return True
+            else:
+                self._consecutive_midword_hits = 0
 
         return False
 
@@ -589,6 +596,7 @@ class HookManager:
             # Mid-word switch: Swap buffers to stay in sync with the new layout on screen.
             # (e.g. if we switched from HE to EN, what was 'shadow' is now 'active').
             self.buffer_active, self.buffer_shadow = self.buffer_shadow, self.buffer_active
+            self._consecutive_midword_hits = 0
 
         self._clear_history()
 

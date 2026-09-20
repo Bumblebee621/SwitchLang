@@ -15,7 +15,7 @@ logger = logging.getLogger('switchlang.sensitivity')
 class SensitivityManager:
     """Manages the dynamic decision boundary threshold Δ."""
 
-    def __init__(self, baseline_delta=4.0, alpha=0.5, p=2.0):
+    def __init__(self, baseline_delta=3.5, alpha=0.5, p=2.0):
         """Initialize sensitivity state.
 
         Args:
