@@ -11,17 +11,48 @@ on a slow, unreliable internet stream.
 
 import json
 import os
+import re
 import sys
+
+
 def _load_env():
-    """Load variables from .env into os.environ if it exists."""
+    """Load variables from .env into os.environ if it exists.
+
+    Covers the subset of the dotenv format this project uses: blank lines and
+    comments, an optional `export ` prefix, single- or double-quoted values,
+    and trailing inline comments. Variables already set in the environment
+    win, matching dotenv's default of not overriding.
+    """
     env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
-    if os.path.exists(env_path):
-        with open(env_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    k, v = line.split('=', 1)
-                    os.environ.setdefault(k.strip(), v.strip().strip('"\''))
+    if not os.path.exists(env_path):
+        return
+
+    with open(env_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+
+            key, value = line.split('=', 1)
+            key = key.strip()
+            if key.startswith('export '):
+                key = key[len('export '):].strip()
+            if not key:
+                continue
+
+            value = value.strip()
+            if value[:1] in ('"', "'"):
+                # Quoted: take up to the matching quote, dropping any trailing comment.
+                quote = value[0]
+                end = value.find(quote, 1)
+                value = value[1:end] if end != -1 else value[1:]
+            else:
+                # Bare: whitespace followed by '#' starts a comment, but a bare
+                # '#' does not (it is legitimate inside e.g. a URL fragment).
+                value = re.split(r'\s+#', value, maxsplit=1)[0].strip()
+
+            os.environ.setdefault(key, value)
+
 
 _load_env()
 

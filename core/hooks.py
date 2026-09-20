@@ -385,7 +385,11 @@ class HookManager:
 
     def _evaluate_current(self, effective_layout, on_delimiter=False):
         """Evaluate current buffers and log decision details."""
-        eff_mode = 'technical' if (self.model_mode == 'smart' and self._cached_is_ide_editor) else self.model_mode
+        # 'smart' resolves to technical inside IDE editors and standard elsewhere;
+        # it must never reach the engine, whose mode is 'standard' or 'technical'.
+        eff_mode = self.model_mode
+        if eff_mode == 'smart':
+            eff_mode = 'technical' if self._cached_is_ide_editor else 'standard'
         should_switch, diff, is_colliding, is_ambiguous = self.engine.evaluate(
             self.buffer_active,
             self.buffer_shadow,

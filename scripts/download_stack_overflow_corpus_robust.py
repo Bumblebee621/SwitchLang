@@ -1,3 +1,4 @@
+import codecs
 import os
 import urllib.request
 import re
@@ -13,6 +14,11 @@ def build_clean_corpus_robust(url, output_txt_path, sample_rate=100, target_size
     current_lines = 0
     req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
     response = urllib.request.urlopen(req)
+
+    # A multi-byte character can straddle a chunk boundary, so decode
+    # incrementally — decoding each chunk on its own would turn the split
+    # character into U+FFFD and silently corrupt the corpus.
+    decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
 
     pbar = tqdm(unit=' rows', desc="Processing rows")
     
@@ -31,7 +37,7 @@ def build_clean_corpus_robust(url, output_txt_path, sample_rate=100, target_size
                 chunk_bytes = response.read(chunk_size)
                 if not chunk_bytes:
                     break
-                chunk = chunk_bytes.decode('utf-8', errors='replace')
+                chunk = decoder.decode(chunk_bytes)
                 buffer += chunk
                 
                 # Find all <row ...> tokens
