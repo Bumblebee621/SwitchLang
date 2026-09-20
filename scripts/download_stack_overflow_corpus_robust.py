@@ -23,8 +23,19 @@ def build_clean_corpus_robust(url, output_txt_path, sample_rate=100, target_size
     row_re = re.compile(r'<row\s+([^>]*?)\s*/?>', re.IGNORECASE)
     id_re = re.compile(r'Id="(\d+)"', re.IGNORECASE)
     text_re = re.compile(r'Text="([^"]*)"', re.IGNORECASE)
-    code_block_re = re.compile(r'<(?:pre|blockquote|code)[^>]*>.*?</(?:pre|blockquote|code)>', re.DOTALL | re.IGNORECASE)
-    tag_re = re.compile(r'<[^>]+>')
+    code_block_re = re.compile(r'<(?:pre|blockquote|code)\b[^>]*>.*?</(?:pre|blockquote|code)>', re.DOTALL | re.IGNORECASE)
+    # Whitelist of standard HTML tags to avoid eating prose with angle brackets like List<String> or a < b
+    html_tags = (
+        r'a|abbr|acronym|address|applet|area|article|aside|audio|b|base|basefont|bdi|bdo|big|'
+        r'blockquote|body|br|button|canvas|caption|center|cite|code|col|colgroup|data|datalist|dd|'
+        r'del|details|dfn|dialog|dir|div|dl|dt|em|embed|fieldset|figcaption|figure|font|footer|form|'
+        r'frame|frameset|h[1-6]|head|header|hgroup|hr|html|i|iframe|img|input|ins|kbd|label|legend|'
+        r'li|link|main|map|mark|meta|meter|nav|noframes|noscript|object|ol|optgroup|option|output|'
+        r'p|param|picture|pre|progress|q|rp|rt|ruby|s|samp|script|section|select|small|source|span|'
+        r'strike|strong|style|sub|summary|sup|svg|table|tbody|td|template|textarea|tfoot|th|thead|'
+        r'time|title|tr|track|tt|u|ul|var|video|wbr'
+    )
+    tag_re = re.compile(rf'</?(?:{html_tags})\b[^>]*>', re.IGNORECASE)
     link_re = re.compile(r'\[([^\]]+)\]\([^\)]+\)')
     md_style_re = re.compile(r'(\*\*|__|[\*_])')
     url_re = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+')

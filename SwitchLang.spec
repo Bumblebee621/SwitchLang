@@ -12,6 +12,7 @@ production_datas = [
     ('data/icon.png', 'data'),
     ('ui/style.qss', 'ui'),
     ('ui/check.svg', 'ui'),
+    ('ui/radio.svg', 'ui'),
 ]
 
 a = Analysis(

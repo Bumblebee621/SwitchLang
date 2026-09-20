@@ -127,6 +127,25 @@ QCheckBox::indicator:hover {
     border-color: #89b4fa;
 }
 
+QRadioButton::indicator {
+    width: 20px;
+    height: 20px;
+    border: 2px solid #45475a;
+    border-radius: 12px;
+    background-color: #313244;
+    padding: 2px;
+}
+
+QRadioButton::indicator:checked {
+    background-color: #89b4fa;
+    border-color: #89b4fa;
+    image: url("ui:radio.svg");
+}
+
+QRadioButton::indicator:hover {
+    border-color: #89b4fa;
+}
+
 QSlider::groove:horizontal {
     height: 6px;
     background-color: #313244;

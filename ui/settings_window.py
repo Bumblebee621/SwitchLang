@@ -4,15 +4,13 @@ settings_window.py — Main settings dialog with General and Blacklist tabs.
 
 import json
 import os
-import threading
-
 from PyQt6.QtWidgets import (
     QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QCheckBox, QSlider, QPushButton, QLineEdit,
     QListWidget, QGroupBox, QFrame, QSizePolicy, QMessageBox,
     QScrollArea, QSpinBox, QProgressBar, QDialog, QRadioButton
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread
 from PyQt6.QtGui import QFont, QIcon, QKeyEvent
 
 from core.startup import is_startup_enabled, set_startup_enabled
@@ -58,7 +56,29 @@ def vk_list_to_label(vk_list):
     return ' + '.join(parts)
 
 
+class UpdateWorker(QThread):
+    """Worker thread to check for updates without freezing UI."""
+    finished = pyqtSignal(str, str)  # version, url
 
+    def run(self):
+        v, url = check_for_updates()
+        self.finished.emit(v or "", url or "")
+
+
+class DownloadWorker(QThread):
+    """Worker thread to download and install updates."""
+    progress = pyqtSignal(int, int)
+    error = pyqtSignal(str)
+
+    def __init__(self, url):
+        super().__init__()
+        self.url = url
+
+    def run(self):
+        try:
+            download_and_install(self.url, progress_callback=self.progress.emit)
+        except Exception as e:
+            self.error.emit(str(e))
 
 
 class ProgressDialog(QDialog):
@@ -486,11 +506,9 @@ class SettingsWindow(QMainWindow):
         self.update_btn.setText("Checking...")
         self.update_status.setText("")
 
-        def worker():
-            v, url = check_for_updates()
-            QTimer.singleShot(0, lambda: self._on_update_check_finished(v or "", url or ""))
-
-        threading.Thread(target=worker, daemon=True).start()
+        self._update_worker = UpdateWorker()
+        self._update_worker.finished.connect(self._on_update_check_finished)
+        self._update_worker.start()
 
     def _on_update_check_finished(self, version, url):
         """Handle the result of the update check."""
@@ -518,16 +536,10 @@ class SettingsWindow(QMainWindow):
         self._progress_dialog = ProgressDialog(self)
         self._progress_dialog.show()
 
-        def on_progress(current, total):
-            QTimer.singleShot(0, lambda: self._progress_dialog.set_progress(current, total))
-
-        def worker():
-            try:
-                download_and_install(url, progress_callback=on_progress)
-            except Exception as e:
-                QTimer.singleShot(0, lambda: self._on_download_error(str(e)))
-
-        threading.Thread(target=worker, daemon=True).start()
+        self._download_worker = DownloadWorker(url)
+        self._download_worker.progress.connect(self._progress_dialog.set_progress)
+        self._download_worker.error.connect(self._on_download_error)
+        self._download_worker.start()
 
     def _on_download_error(self, err_msg):
         """Handle download errors."""
