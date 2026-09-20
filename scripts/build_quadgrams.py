@@ -166,6 +166,61 @@ def build_quadgrams_from_file_parallel(file_path, allowed_chars=None,
     with open(file_path, 'r', encoding='utf-8') as f:
         return build_quadgrams_from_lines(f, allowed_chars, min_count)
 
+def save_model_data_to_trie(data, output_trie_path, output_meta_path):
+    """Save in-memory quadgram model data dict directly to .marisa and .meta.json."""
+    import marisa_trie
+
+    quadgram_counts = data.get('quadgram_counts', {})
+    trigram_counts = data.get('trigram_counts', {})
+    bigram_counts = data.get('bigram_counts', {})
+    vocab_size = data.get('vocab_size', 30)
+
+    # Compute total bigrams and per-first-character totals
+    total_bigrams = sum(bigram_counts.values())
+    bigram_first_totals = {}
+    for k, c in bigram_counts.items():
+        if k:
+            first_char = k[0]
+            bigram_first_totals[first_char] = bigram_first_totals.get(first_char, 0) + c
+    bigram_first_totals = dict(sorted(bigram_first_totals.items()))
+
+    # Build list of (ngram, (count,)) for RecordTrie
+    logger.info(f"Packing {len(quadgram_counts)} quads, {len(trigram_counts)} tris, {len(bigram_counts)} bis...")
+    items = []
+    for k, v in quadgram_counts.items():
+        items.append((k, (int(v),)))
+    for k, v in trigram_counts.items():
+        items.append((k, (int(v),)))
+    for k, v in bigram_counts.items():
+        items.append((k, (int(v),)))
+
+    logger.info(f"Building RecordTrie with {len(items)} total entries...")
+    trie = marisa_trie.RecordTrie("<I", items)
+
+    logger.info(f"Saving trie to {output_trie_path}...")
+    trie.save(output_trie_path)
+
+    metadata = {
+        'vocab_size': vocab_size,
+        'total_bigrams': total_bigrams,
+        'bigram_first_totals': bigram_first_totals,
+        'counts': {
+            'quadgrams': len(quadgram_counts),
+            'trigrams': len(trigram_counts),
+            'bigrams': len(bigram_counts)
+        }
+    }
+
+    logger.info(f"Saving metadata to {output_meta_path}...")
+    with open(output_meta_path, 'w', encoding='utf-8') as f:
+        json.dump(metadata, f, indent=2, ensure_ascii=False)
+
+    trie_size = os.path.getsize(output_trie_path) / (1024 * 1024)
+    meta_size = os.path.getsize(output_meta_path) / 1024
+    logger.info(f"Done! Trie: {trie_size:.2f} MB, Meta: {meta_size:.1f} KB")
+    return True
+
+
 # Allowed character sets for each language to ensure model purity.
 # We include standard English/Hebrew letters and common punctuation.
 # We explicitly EXCLUDE numbers and accented characters (like è, é) to 
@@ -178,7 +233,7 @@ def main():
     Main entry point for the quadgram building script.
     
     Ensures corpora are downloaded, triggers the parallel processing for both 
-    English and Hebrew text files, and saves the resulting models as JSON.
+    English and Hebrew text files, and saves the resulting models directly to .marisa.
     """
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_dir = os.path.dirname(script_dir)
@@ -195,8 +250,6 @@ def main():
         download_corpora.main()
 
     start_time = time.time()
-
-    from convert_models_to_trie import save_model_data_to_trie
 
     # English
     logger.info("Processing English corpus...")

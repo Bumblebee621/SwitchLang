@@ -7,7 +7,8 @@ import logging
 # Ensure we can use the same processing logic as build_quadgrams.py
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from build_quadgrams import (ALLOWED_EN, MIN_QUADGRAM_COUNT,
-                             build_quadgrams_from_lines)
+                             build_quadgrams_from_lines,
+                             save_model_data_to_trie)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s]: %(message)s')
 logger = logging.getLogger(__name__)
@@ -42,7 +43,6 @@ def main():
     so_data = build_so_quadgrams(so_txt_path)
     
     if so_data:
-        from convert_models_to_trie import save_model_data_to_trie
         save_model_data_to_trie(so_data, so_trie_path, so_meta_path)
         logger.info(f"SO model saved to: {so_trie_path} (Vocab: {so_data['vocab_size']})")
         
