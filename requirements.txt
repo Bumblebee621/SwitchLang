@@ -1,9 +1,4 @@
 # UI Framework (System Tray)
 PyQt6>=6.6
 
-# Global hooks (Mouse events, fallback)
-pynput>=1.7
-python-dotenv
-requests>=2.31.0
-datasets
 marisa-trie>=1.1.0

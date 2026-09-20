@@ -13,7 +13,6 @@ import sys
 import ctypes
 import signal
 from ctypes import wintypes
-from collections import deque
  
 # Global handle for the single-instance mutex
 _mutex_handle = None
@@ -32,25 +31,6 @@ STORAGE_DIR = os.path.join(os.getenv('APPDATA') or os.path.expanduser('~/.config
 # Ensure storage directory exists
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
-class LineRotatingFileHandler(logging.Handler):
-    """A log handler that limits the file to a maximum number of lines."""
-    def __init__(self, filename, max_lines=1000, encoding='utf-8'):
-        super().__init__()
-        self.filename = filename
-        self.encoding = encoding
-        self.lines = deque(maxlen=max_lines)
-        if os.path.exists(self.filename):
-            with open(self.filename, 'r', encoding=self.encoding) as f:
-                self.lines.extend(f.readlines())
-                
-    def emit(self, record):
-        try:
-            msg = self.format(record)
-            self.lines.append(msg + '\n')
-            with open(self.filename, 'w', encoding=self.encoding) as f:
-                f.writelines(self.lines)
-        except Exception:
-            self.handleError(record)
 
 # Custom formatter that trims the logger name to only its last segment
 # (e.g. 'switchlang.hooks' -> 'hooks', 'core.engine' -> 'engine')
@@ -88,9 +68,9 @@ def set_debug_mode(enabled):
     if enabled:
         # Attach file handler (once)
         if _log_file_handler is None:
-            _log_file_handler = LineRotatingFileHandler(
+            _log_file_handler = logging.handlers.RotatingFileHandler(
                 os.path.join(STORAGE_DIR, 'switchlang.log'),
-                max_lines=1000, encoding='utf-8'
+                maxBytes=200 * 1024, backupCount=1, encoding='utf-8'
             )
             _log_file_handler.setFormatter(_ShortNameFormatter(_LOG_FORMAT, datefmt=_LOG_DATE_FORMAT))
         if _log_file_handler not in root.handlers:

@@ -90,34 +90,6 @@ class QuadgramModel:
 
         return log_prob
 
-    def score_incremental(self, prev3, new_char):
-        """Score a single new character given the previous three.
-
-        Useful for real-time per-keystroke evaluation without
-        rescoring the entire buffer.
-
-        Args:
-            prev3: The preceding characters (string of length >= 3).
-            new_char: The new character to score.
-
-        Returns:
-            float log-probability increment for this quadgram.
-        """
-        if len(prev3) < 3:
-            return 0.0
-
-        quadgram = (prev3[-3:] + new_char).lower()
-        trigram = prev3[-3:].lower()
-
-        trie = self._trie
-        q_res = trie.get(quadgram)
-        quad_count = q_res[0][0] if q_res else 0
-        t_res = trie.get(trigram)
-        tri_count = t_res[0][0] if t_res else 0
-
-        v = self.vocab_size
-        return math.log((quad_count + 1) / (tri_count + v))
-
 
 def load_models(data_dir, load_so=False):
     """Load English, Hebrew, and optionally Stack Overflow quadgram models.

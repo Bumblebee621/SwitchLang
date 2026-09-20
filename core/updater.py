@@ -2,15 +2,17 @@
 updater.py — Logic for checking and downloading updates from GitHub.
 """
 
-import requests
+import json
 import os
 import sys
 import subprocess
 import tempfile
+import urllib.request
 from core.version import __version__
 
 REPO = "Bumblebee621/SwitchLang"
 GITHUB_API_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
+_USER_AGENT = "SwitchLang-Updater"
 
 def check_for_updates():
     """
@@ -18,9 +20,9 @@ def check_for_updates():
     Returns: (new_version_string, download_url) if higher version exists, else (None, None).
     """
     try:
-        response = requests.get(GITHUB_API_URL, timeout=10)
-        response.raise_for_status()
-        data = response.json()
+        req = urllib.request.Request(GITHUB_API_URL, headers={"User-Agent": _USER_AGENT})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8"))
         
         latest_tag = data.get("tag_name", "").lstrip("v")
         if not latest_tag:
@@ -62,18 +64,18 @@ def download_and_install(url, progress_callback=None):
     progress_callback: function(current_bytes, total_bytes)
     """
     try:
-        response = requests.get(url, stream=True, timeout=30)
-        response.raise_for_status()
-        
-        total_size = int(response.headers.get('content-length', 0))
-        
+        req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
         temp_dir = tempfile.gettempdir()
         installer_path = os.path.join(temp_dir, "SwitchLang_Setup.exe")
-        
-        downloaded = 0
-        with open(installer_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
+
+        with urllib.request.urlopen(req, timeout=30) as response:
+            total_size = int(response.getheader('Content-Length', 0))
+            downloaded = 0
+            with open(installer_path, "wb") as f:
+                while True:
+                    chunk = response.read(8192)
+                    if not chunk:
+                        break
                     f.write(chunk)
                     downloaded += len(chunk)
                     if progress_callback:

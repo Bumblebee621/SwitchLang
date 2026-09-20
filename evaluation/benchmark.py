@@ -22,6 +22,7 @@ import argparse
 import atexit
 import collections
 import io
+import math
 import os
 import re
 import statistics
@@ -142,21 +143,34 @@ class EvaluationHarness:
             score = self.engine.he_model.score(text)
             return score, {'score': score}
 
+    @staticmethod
+    def _score_incremental_char(model, prev3, new_char):
+        """Score a single new character given the previous three using model's trie."""
+        if len(prev3) < 3:
+            return 0.0
+        quadgram = (prev3[-3:] + new_char).lower()
+        trigram = prev3[-3:].lower()
+        q_res = model._trie.get(quadgram)
+        quad_count = q_res[0][0] if q_res else 0
+        t_res = model._trie.get(trigram)
+        tri_count = t_res[0][0] if t_res else 0
+        return math.log((quad_count + 1) / (tri_count + model.vocab_size))
+
     def _score_incremental_detailed(self, state, prev3, new_char, layout):
         """Score a single new character given previous state and return (total_score, new_state)."""
         mode = self.engine.model_mode
         if layout == 'en':
-            inc_std = self.engine.en_model.score_incremental(prev3, new_char)
+            inc_std = self._score_incremental_char(self.engine.en_model, prev3, new_char)
             new_std = state['std'] + inc_std
             new_state = {'std': new_std}
             if 'so' in state and self.engine.en_so_model and mode == 'technical':
-                inc_so = self.engine.en_so_model.score_incremental(prev3, new_char)
+                inc_so = self._score_incremental_char(self.engine.en_so_model, prev3, new_char)
                 new_so = state['so'] + inc_so
                 new_state['so'] = new_so
                 return max(new_std, new_so), new_state
             return new_std, new_state
         else:
-            inc = self.engine.he_model.score_incremental(prev3, new_char)
+            inc = self._score_incremental_char(self.engine.he_model, prev3, new_char)
             new_score = state['score'] + inc
             return new_score, {'score': new_score}
 

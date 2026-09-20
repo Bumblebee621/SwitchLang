@@ -132,18 +132,8 @@ def vk_to_char(vk_code, shifted, layout='en', caps_lock=False):
     Returns:
         The character string, or None if unmapped.
     """
-    if vk_code == 0x20: return ' '
-    if vk_code == 0x0D: return '\n'
-    if vk_code == 0x09: return '\t'
-
-    effective_shift = _get_effective_shift(vk_code, shifted, caps_lock)
-
-    table = VK_TO_CHARS_SHIFT if effective_shift else VK_TO_CHARS
-    pair = table.get(vk_code)
-    if pair is None:
-        return None
-        
-    return pair[0] if layout == 'en' else pair[1]
+    en, he = get_both_chars(vk_code, shifted, caps_lock)
+    return en if layout == 'en' else he
 
 
 def get_both_chars(vk_code, shifted, caps_lock=False):

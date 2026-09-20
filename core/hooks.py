@@ -19,10 +19,8 @@ import logging
 import threading
 import time
 
-from pynput import mouse as pynput_mouse
-
 from core.keymap import get_both_chars, vk_to_char
-from core.switcher import execute_switch, get_current_layout
+from core.switcher import execute_switch, get_current_layout, GUITHREADINFO
 
 logger = logging.getLogger('switchlang.hooks')
 
@@ -31,7 +29,7 @@ logger = logging.getLogger('switchlang.hooks')
 # =============================================================================
 
 # Dedicated user32 with use_last_error=True (separate from
-# ctypes.windll.user32 which may be modified by PyQt6/pynput)
+# ctypes.windll.user32 which may be modified by PyQt6)
 _user32 = ctypes.WinDLL('user32', use_last_error=True)
 
 # Also keep a reference for non-hook calls
@@ -41,10 +39,17 @@ user32.GetKeyboardLayout.restype = wintypes.HKL
 
 # Hook constants
 WH_KEYBOARD_LL = 13
+WH_MOUSE_LL = 14
 WM_KEYDOWN = 0x0100
 WM_SYSKEYDOWN = 0x0104
 WM_QUIT = 0x0012
 HC_ACTION = 0
+
+# Mouse event constants
+WM_LBUTTONDOWN = 0x0201
+WM_RBUTTONDOWN = 0x0204
+WM_MBUTTONDOWN = 0x0207
+WM_XBUTTONDOWN = 0x020B
 
 # Flag to detect injected keys (bit 4 in KBDLLHOOKSTRUCT.flags)
 # We use this to avoid infinite loops when we re-inject corrected characters.
@@ -130,19 +135,6 @@ class KBDLLHOOKSTRUCT(ctypes.Structure):
     ]
 
 
-class GUITHREADINFO(ctypes.Structure):
-    """GUI thread information used to detect focused control properties."""
-    _fields_ = [
-        ("cbSize", wintypes.DWORD),
-        ("flags", wintypes.DWORD),
-        ("hwndActive", wintypes.HWND),
-        ("hwndFocus", wintypes.HWND),
-        ("hwndCapture", wintypes.HWND),
-        ("hwndMenuOwner", wintypes.HWND),
-        ("hwndMoveSize", wintypes.HWND),
-        ("hwndCaret", wintypes.HWND),
-        ("rcCaret", wintypes.RECT)
-    ]
 
 _user32.GetGUIThreadInfo.argtypes = [wintypes.DWORD, ctypes.POINTER(GUITHREADINFO)]
 _user32.GetGUIThreadInfo.restype = wintypes.BOOL
@@ -222,7 +214,9 @@ class HookManager:
         self._hook_id = None
         self._hook_proc = None
         self._hook_thread = None
-        self._mouse_listener = None
+        self._mouse_hook_id = None
+        self._mouse_hook_proc = None
+        self._mouse_thread = None
         self._running = False
 
         self._shift_pressed = False
@@ -722,30 +716,19 @@ class HookManager:
                         self._hook_id, n_code, w_param, l_param
                     )
 
-                if w_param in (WM_KEYDOWN, WM_SYSKEYDOWN):
-                    # Track modifier states for combo-blocking
-                    if vk in (VK_SHIFT, VK_LSHIFT, VK_RSHIFT):
-                        self._shift_pressed = True
-                    elif vk in (VK_CONTROL, VK_LCONTROL, VK_RCONTROL):
-                        self._ctrl_pressed = True
-                    elif vk in (VK_MENU, VK_LMENU, VK_RMENU):
-                        self._alt_pressed = True
-                    else:
-                        # Check suspend hotkey before normal processing
-                        if self._check_suspend_hotkey(vk):
-                            pass  # Let the key through, we just toggled suspension
-                        else:
-                            block = self._handle_keypress(vk)
-                            if block:
-                                return 1 # Stop the key from reaching the original app.
-                else:
-                    # KEY UP events
-                    if vk in (VK_SHIFT, VK_LSHIFT, VK_RSHIFT):
-                        self._shift_pressed = False
-                    elif vk in (VK_CONTROL, VK_LCONTROL, VK_RCONTROL):
-                        self._ctrl_pressed = False
-                    elif vk in (VK_MENU, VK_LMENU, VK_RMENU):
-                        self._alt_pressed = False
+                is_down = w_param in (WM_KEYDOWN, WM_SYSKEYDOWN)
+                if vk in (VK_SHIFT, VK_LSHIFT, VK_RSHIFT):
+                    self._shift_pressed = is_down
+                elif vk in (VK_CONTROL, VK_LCONTROL, VK_RCONTROL):
+                    self._ctrl_pressed = is_down
+                elif vk in (VK_MENU, VK_LMENU, VK_RMENU):
+                    self._alt_pressed = is_down
+                elif is_down:
+                    # Check suspend hotkey before normal processing
+                    if not self._check_suspend_hotkey(vk):
+                        block = self._handle_keypress(vk)
+                        if block:
+                            return 1  # Stop the key from reaching the original app.
         except Exception:
             logger.exception('Error in keyboard hook callback')
 
@@ -792,10 +775,56 @@ class HookManager:
         self._hook_id = None
         logger.info('Keyboard hook removed')
 
-    def _on_mouse_click(self, x, y, button, pressed):
-        """Mouse click callback — triggers a Context Resumption Event (CRE)."""
-        if pressed and button != pynput_mouse.Button.middle:
-            self._fire_cre('mouse_click')
+    def _mouse_hook_callback(self, n_code, w_param, l_param):
+        """Low-level mouse hook callback — triggers CRE on mouse clicks."""
+        try:
+            if n_code == HC_ACTION:
+                # Trigger on Left, Right, or X-button down (exclude middle click, matching previous behavior)
+                if w_param in (WM_LBUTTONDOWN, WM_RBUTTONDOWN, WM_XBUTTONDOWN):
+                    self._fire_cre('mouse_click')
+        except Exception:
+            logger.exception('Error in mouse hook callback')
+
+        return _user32.CallNextHookEx(
+            self._mouse_hook_id, n_code, w_param, l_param
+        )
+
+    def _mouse_thread_func(self):
+        """Thread worker that installs the mouse hook and maintains a Windows message pump."""
+        self._mouse_hook_proc = HOOKPROC(self._mouse_hook_callback)
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+        kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+        h_mod = kernel32.GetModuleHandleW(None)
+
+        self._mouse_hook_id = _user32.SetWindowsHookExW(
+            WH_MOUSE_LL,
+            self._mouse_hook_proc,
+            h_mod,
+            0
+        )
+
+        if not self._mouse_hook_id:
+            err = ctypes.get_last_error()
+            logger.error('Failed to install mouse hook, error=%d', err)
+            return
+
+        logger.info('Mouse hook installed (id=%s)', self._mouse_hook_id)
+
+        msg = wintypes.MSG()
+        while self._running:
+            result = _user32.GetMessageW(
+                ctypes.byref(msg), None, 0, 0
+            )
+            if result <= 0:
+                break
+            _user32.TranslateMessage(ctypes.byref(msg))
+            _user32.DispatchMessageW(ctypes.byref(msg))
+
+        _user32.UnhookWindowsHookEx(self._mouse_hook_id)
+        self._mouse_hook_id = None
+        logger.info('Mouse hook removed')
 
 
     def _poll_foreground_window(self):
@@ -859,12 +888,13 @@ class HookManager:
         )
         self._hook_thread.start()
 
-        # Thread 2: Mouse listener (pynput)
-        self._mouse_listener = pynput_mouse.Listener(
-            on_click=self._on_mouse_click
+        # Thread 2: Mouse listener (native Win32 WH_MOUSE_LL)
+        self._mouse_thread = threading.Thread(
+            target=self._mouse_thread_func,
+            daemon=True,
+            name='MouseHookThread'
         )
-        self._mouse_listener.daemon = True
-        self._mouse_listener.start()
+        self._mouse_thread.start()
 
         # Thread 3: Slow poller for OS/UI context
         self._fg_thread = threading.Thread(
@@ -879,7 +909,7 @@ class HookManager:
         """Safely dismantle all hooks and stop background threads."""
         self._running = False
 
-        if self._hook_id and self._hook_thread and self._hook_thread.ident:
+        if self._hook_thread and self._hook_thread.ident:
             # Send WM_QUIT to the hook thread's message pump
             _user32.PostThreadMessageW(
                 self._hook_thread.ident,
@@ -887,10 +917,18 @@ class HookManager:
                 0, 0
             )
 
-        if self._mouse_listener:
-            self._mouse_listener.stop()
+        if self._mouse_thread and self._mouse_thread.ident:
+            # Send WM_QUIT to the mouse hook thread's message pump
+            _user32.PostThreadMessageW(
+                self._mouse_thread.ident,
+                WM_QUIT,
+                0, 0
+            )
 
         if self._hook_thread and self._hook_thread.is_alive():
             self._hook_thread.join(timeout=2.0)
+
+        if self._mouse_thread and self._mouse_thread.is_alive():
+            self._mouse_thread.join(timeout=2.0)
 
         logger.info('All hooks stopped')
