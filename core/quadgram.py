@@ -24,10 +24,16 @@ class QuadgramModel:
             model_path = f"{base}.marisa"
 
         self.path = model_path
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model file not found: {model_path}")
+
+        meta_path = model_path[:-7] + '.meta.json'
+        if not os.path.exists(meta_path):
+            raise FileNotFoundError(f"Metadata file not found: {meta_path}")
+
         self._trie = marisa_trie.RecordTrie("<I")
         self._trie.mmap(model_path)
 
-        meta_path = model_path[:-7] + '.meta.json'
         with open(meta_path, 'r', encoding='utf-8') as f:
             meta = json.load(f)
 

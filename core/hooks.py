@@ -286,6 +286,7 @@ class HookManager:
         """Update the model selection mode (standard, smart, technical)."""
         if mode in ('standard', 'smart', 'technical'):
             self.model_mode = mode
+            self.engine.set_model_mode(mode)
             logger.info('Model mode set to: %s', mode)
         else:
             logger.warning('Invalid model mode ignored: %r', mode)

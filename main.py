@@ -125,7 +125,7 @@ def main():
 
     try:
         models = load_models(DATA_DIR, load_so=True)
-    except FileNotFoundError as e:
+    except (FileNotFoundError, OSError, ValueError) as e:
         sys.exit(
             f"Error: Model files not found in {DATA_DIR} ({e}).\n"
             "Please run 'python scripts/build_quadgrams.py' to generate them."
