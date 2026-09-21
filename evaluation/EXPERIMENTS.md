@@ -34,7 +34,7 @@ That fixes the sign per corpus before any measurement: on English the raised sco
 directions so both degrade. The open question was only the magnitude, and whether the gain on technical text
 justifies the loss.
 
-Measured by `evaluation/technical_mode.py` at delta 4.0, K=5, fold 0. The `so` and `he` models were built
+Measured by `evaluation/technical_mode.py` at delta 4.0, K=5, fold 0 *(historical note: this one-off sweep script was retired in commit `e123cdd`; standard technical mode is natively supported in `evaluation/benchmark.py --mode technical`)*. The `so` and `he` models were built
 without their test lines; `en` reuses the shipped model and is a floor check, not a clean measurement.
 
 | arm | words | FP/1k std → tech | FN/1k std → tech |
@@ -63,7 +63,7 @@ reached by a different route.
 the English side. The SO model is ~18x smaller under the same add-1 smoothing, so it is flatter and its
 penalty for unseen n-grams is milder. Measured directly: over 3,000 random junk strings the SO model wins
 61% of the time and inflates the English score by **1.71 nats on average**, against a delta of 4.0.
-`evaluation/calibrate_models.py` confirms it on real text — SO runs at −1.29 nats/char with σ 0.57 against
+`evaluation/calibrate_models.py` confirms it on real text *(historical note: script retired in commit `e123cdd`)* — SO runs at −1.29 nats/char with σ 0.57 against
 EN's −1.48 with σ 0.75, i.e. both more generous and flatter.
 
 Three alternatives, measured by `evaluation/combination_bench.py` at delta 4.0, K=5, fold 0, 75,000 lines
@@ -212,7 +212,7 @@ compounds **linearly with word length** — 1.39 nats over a 5-char word, 2.50 o
 `score_active` on real Hebrew and inflating `score_diff` toward spurious switching *out of Hebrew, more so the
 longer the word*.
 
-**It does not.** Measured by `evaluation/calibration.py` on held-out fold models (K=5, fold 0, `prune2`),
+**It does not.** Measured by `evaluation/word_length_analysis.py` (originally `calibration.py`) on held-out fold models (K=5, fold 0, `prune2`),
 20,000 lines per language, 775k EN and 441k HE words:
 
 | | slope of `score_diff` vs word length | intercept |
@@ -323,7 +323,7 @@ To compensate for the $+0.8$ character latency floor introduced by requiring a s
 
 ### 100,000-Line Head-to-Head Comparison (5,966,764 Words)
 
-Measured across 100,000 lines per language (`evaluation/consecutive_bench.py --variants k1:4.0,k2:3.5 --max-lines 100000`):
+Measured across 100,000 lines per language via `evaluation/benchmark.py --variants k1:4.0,k2:3.5 --max-lines 100000` *(originally run via `evaluation/consecutive_bench.py` prior to consolidation in commit `e123cdd`)*:
 
 | Language | Engine Variant | Δ | Words Tested | False Positives | FP / 1k | Δ FP% | False Negatives | FN / 1k | Δ FN% | Median Lat | Mean Lat |
 |---|---|---|---|---|---|---|---|---|---|---|---|

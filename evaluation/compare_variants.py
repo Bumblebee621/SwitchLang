@@ -17,6 +17,7 @@ Usage:
 
 import argparse
 import json
+import logging
 import os
 import statistics
 import sys
@@ -26,8 +27,11 @@ from collections import Counter
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'scripts'))
 
-from benchmark import load_corpus_lines, run_test
+from benchmark import load_corpus_lines, run_test, shutdown_pool
 from build_quadgrams import ALLOWED_EN, ALLOWED_HE, build_quadgrams_from_lines, save_model_data_to_trie
+
+# Quiet verbose trie-compilation logs during variant comparison sweeps
+logging.getLogger('build_quadgrams').setLevel(logging.WARNING)
 
 ALLOWED = {'en': ALLOWED_EN, 'he': ALLOWED_HE}
 
@@ -123,23 +127,31 @@ def run_fold(parts, lines, lang, fold, k, variants, cache_dir, data_dir, delta,
         test = test[:max_test_lines]
 
     results = {}
-    for name in variants:
-        var_trie = os.path.join(cache_dir, f'{lang}_k{k}_f{fold}_{name}.marisa')
-        var_meta = os.path.join(cache_dir, f'{lang}_k{k}_f{fold}_{name}.meta.json')
-        save_model_data_to_trie(VARIANTS[name](raw), var_trie, var_meta)
+    created_files = []
+    try:
+        for name in variants:
+            var_trie = os.path.join(cache_dir, f'{lang}_k{k}_f{fold}_{name}.marisa')
+            var_meta = os.path.join(cache_dir, f'{lang}_k{k}_f{fold}_{name}.meta.json')
+            save_model_data_to_trie(VARIANTS[name](raw), var_trie, var_meta)
+            created_files.extend([var_trie, var_meta])
 
-        kwargs = {'en_model_path': var_trie} if lang == 'en' else {'he_model_path': var_trie}
-        fp = run_test('fp', test, lang, delta, data_dir, jobs=jobs,
-                      req_confirmations=req_confirmations, **kwargs)
-        fn = run_test('fn', test, lang, delta, data_dir, jobs=jobs,
-                      req_confirmations=req_confirmations, **kwargs)
-        latency = statistics.mean(fn.latency_values) if fn.latency_values else 0.0
-        results[name] = (fp.fp_per_1k, fn.fn_per_1k, latency)
-
-        if os.path.exists(var_trie):
-            os.remove(var_trie)
-        if os.path.exists(var_meta):
-            os.remove(var_meta)
+            kwargs = {'en_model_path': var_trie} if lang == 'en' else {'he_model_path': var_trie}
+            fp = run_test('fp', test, lang, delta, data_dir, jobs=jobs,
+                          req_confirmations=req_confirmations, **kwargs)
+            fn = run_test('fn', test, lang, delta, data_dir, jobs=jobs,
+                          req_confirmations=req_confirmations, **kwargs)
+            latency = statistics.mean(fn.latency_values) if fn.latency_values else 0.0
+            results[name] = (fp.fp_per_1k, fn.fn_per_1k, latency)
+    finally:
+        # On Windows, open mmaps in worker processes prevent file deletion.
+        # Shutting down the pool releases all worker-side mmap handles first.
+        shutdown_pool()
+        for path in created_files:
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
     return results
 

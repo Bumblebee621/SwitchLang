@@ -111,7 +111,7 @@ class EvaluationHarness:
     """Replays text through the SwitchLang engine to measure accuracy."""
 
     def __init__(self, data_dir, en_model_path=None, he_model_path=None,
-                 mode='standard', scoring='incremental', req_confirmations=2):
+                 mode='standard', req_confirmations=2):
         models = load_models(data_dir, load_so=(mode == 'technical'))
         # Allow overriding individual model files
         if en_model_path:
@@ -126,7 +126,6 @@ class EvaluationHarness:
             en_so_model=models.get('so'),
             model_mode=mode,
         )
-        self.scoring = scoring
         self.req_confirmations = req_confirmations
 
     def _score_text_detailed(self, text, layout):
@@ -533,10 +532,10 @@ atexit.register(shutdown_pool)
 
 
 def run_test(test, lines, lang, delta, data_dir, en_model_path=None,
-             he_model_path=None, mode='standard', jobs=1, scoring='incremental',
+             he_model_path=None, mode='standard', jobs=1,
              req_confirmations=2):
     """Run the 'fp' or 'fn' test over *lines*, optionally across processes."""
-    key = (data_dir, en_model_path, he_model_path, mode, scoring, req_confirmations)
+    key = (data_dir, en_model_path, he_model_path, mode, req_confirmations)
 
     if jobs <= 1:
         harness = EvaluationHarness(*key)
@@ -593,13 +592,22 @@ def _pct(num, denom):
     return (num / denom * 100) if denom else 0.0
 
 
-def print_fp_report(report, corpus_path, model_path, provenance='', max_flagged=30):
+def print_fp_report(report, corpus_path, model_path, provenance='', max_flagged=30,
+                    delta=None, req_confirmations=None, mode=None, jobs=None):
     print(f'\n{"=" * 65}')
     print(f' FALSE POSITIVE TEST  (valid {report.lang.upper()}, layout={report.lang})')
     print(f'{"=" * 65}')
     print(f'Corpus:           {corpus_path}')
     print(f'Split:            {provenance}')
     print(f'Model:            {model_path}')
+    if delta is not None:
+        print(f'Delta (Δ):        {delta}')
+    if req_confirmations is not None:
+        print(f'Confirmations (K):{req_confirmations}')
+    if mode is not None:
+        print(f'Mode:             {mode}')
+    if jobs is not None:
+        print(f'Jobs:             {jobs}')
     print(f'Lines tested:     {report.lines_tested}')
     print(f'Words tested:     {report.words_tested}')
     fpr = _pct(report.fp_count, report.words_tested)
@@ -618,7 +626,8 @@ def print_fp_report(report, corpus_path, model_path, provenance='', max_flagged=
             print(f'  … and {remaining} more')
 
 
-def print_fn_report(report, corpus_path, model_path, provenance='', max_flagged=30):
+def print_fn_report(report, corpus_path, model_path, provenance='', max_flagged=30,
+                    delta=None, req_confirmations=None, mode=None, jobs=None):
     other_lang = 'he' if report.lang == 'en' else 'en'
     print(f'\n{"=" * 65}')
     print(f' FALSE NEGATIVE TEST  (inverted {report.lang.upper()}, layout={other_lang})')
@@ -626,6 +635,14 @@ def print_fn_report(report, corpus_path, model_path, provenance='', max_flagged=
     print(f'Corpus:             {corpus_path}')
     print(f'Split:              {provenance}')
     print(f'Model:              {model_path}')
+    if delta is not None:
+        print(f'Delta (Δ):          {delta}')
+    if req_confirmations is not None:
+        print(f'Confirmations (K):  {req_confirmations}')
+    if mode is not None:
+        print(f'Mode:               {mode}')
+    if jobs is not None:
+        print(f'Jobs:               {jobs}')
     print(f'Lines tested:       {report.lines_tested}')
     print(f'Words tested:       {report.words_tested}')
     sr = _pct(report.lines_switched, report.lines_tested)
@@ -655,9 +672,14 @@ def print_fn_report(report, corpus_path, model_path, provenance='', max_flagged=
             print(f'  … and {remaining} more')
 
 
-def explain_word(word, data_dir, baseline_delta=3.5, mode='standard', req_confirmations=2):
+def explain_word(word, data_dir, baseline_delta=3.5, mode='standard', req_confirmations=2,
+                 en_model_path=None, he_model_path=None):
     """Provide step-by-step diagnostic scoring for a single word."""
     models = load_models(data_dir, load_so=(mode == 'technical'))
+    if en_model_path:
+        models['en'] = QuadgramModel(en_model_path)
+    if he_model_path:
+        models['he'] = QuadgramModel(he_model_path)
     collisions_path = os.path.join(data_dir, 'collisions.json')
     engine = EvaluationEngine(
         models['en'], models['he'],
@@ -668,13 +690,31 @@ def explain_word(word, data_dir, baseline_delta=3.5, mode='standard', req_confir
     )
 
     def _format_breakdown(model, text, label):
+        text = text.lower()
         print(f"\n--- {label}: [{text!r}] ---")
         if len(text) < 2:
             print("  Text too short to score.")
             return 0.0
 
         v = model.vocab_size
-        total_log_prob = 0.0
+
+        if len(text) == 2:
+            count = model.count(text)
+            total = model._bigram_first_totals.get(text[0], 0)
+            prob = (count + 1) / (total + v)
+            step_log = math.log(prob)
+            print(f"  [BIGRAM ONLY] {text!r} -> count={count:,}, total_first={total:,}, prob={prob:.4e}, log_prob={step_log:.4f}")
+            print(f"  Total log-prob: {step_log:.4f}")
+            return step_log
+
+        if len(text) == 3:
+            tri_count = model.count(text)
+            bi_count = model.count(text[:2])
+            prob = (tri_count + 1) / (bi_count + v)
+            step_log = math.log(prob)
+            print(f"  [TRIGRAM ONLY] {text!r} (bi={text[:2]!r}) -> tri={tri_count:,}, bi={bi_count:,}, prob={prob:.4e}, log_prob={step_log:.4f}")
+            print(f"  Total log-prob: {step_log:.4f}")
+            return step_log
 
         first_bi = text[:2]
         bi_cnt = model.count(first_bi)
@@ -706,16 +746,25 @@ def explain_word(word, data_dir, baseline_delta=3.5, mode='standard', req_confir
     print(f" EXPLAIN SCORING: EN='{word_en}' <-> HE='{word_he}' (delta={baseline_delta}, confirmations={req_confirmations}, mode={mode})")
     print("=" * 80)
 
-    for layout, text_active, text_shadow, target_layout, model_act, model_shd in [
-        ('en', word_en, word_he, 'he', models['en'], models['he']),
-        ('he', word_he, word_en, 'en', models['he'], models['en']),
+    for layout, text_active, text_shadow, target_layout in [
+        ('en', word_en, word_he, 'he'),
+        ('he', word_he, word_en, 'en'),
     ]:
         print(f"\n{'#' * 80}")
         print(f" SIMULATING TYPING IN {layout.upper()} LAYOUT (Active: '{text_active}', Shadow: '{text_shadow}')")
         print(f"{'#' * 80}")
 
-        _format_breakdown(model_act, ' ' + text_active + ' ', f"ACTIVE MODEL ({layout.upper()})")
-        _format_breakdown(model_shd, ' ' + text_shadow + ' ', f"SHADOW MODEL ({target_layout.upper()})")
+        _format_breakdown(models[layout], ' ' + text_active + ' ', f"ACTIVE MODEL ({layout.upper()})")
+        if layout == 'en' and mode == 'technical' and models.get('so'):
+            so_log = _format_breakdown(models['so'], ' ' + text_active + ' ', "ACTIVE SO MODEL (Stack Overflow)")
+            en_log = models['en'].score(' ' + text_active + ' ')
+            print(f"  [TECHNICAL MODE ACTIVE] max(EN={en_log:.4f}, SO={so_log:.4f}) = {max(en_log, so_log):.4f}")
+
+        _format_breakdown(models[target_layout], ' ' + text_shadow + ' ', f"SHADOW MODEL ({target_layout.upper()})")
+        if target_layout == 'en' and mode == 'technical' and models.get('so'):
+            so_log = _format_breakdown(models['so'], ' ' + text_shadow + ' ', "SHADOW SO MODEL (Stack Overflow)")
+            en_log = models['en'].score(' ' + text_shadow + ' ')
+            print(f"  [TECHNICAL MODE SHADOW] max(EN={en_log:.4f}, SO={so_log:.4f}) = {max(en_log, so_log):.4f}")
 
         print(f"\nKeystroke-by-keystroke progression in {layout.upper()}:")
         print(f"{'char':<6} {'partial_active':<16} {'partial_shadow':<16} {'diff':>8} {'consec':>7} {'collision':>10} {'switch?':>10}")
@@ -808,18 +857,21 @@ def main():
         help='Worker processes for scoring (default: all cores).  1 disables.',
     )
     parser.add_argument(
-        '--scoring', choices=['full', 'incremental', 'compare'], default='incremental',
-        help='Scoring algorithm: incremental (default, 2x faster O(1)), full, or compare (benchmarks both).',
-    )
-    parser.add_argument(
         '--confirmations', type=int, default=2,
         help='Number of consecutive hits required for mid-word switch (default: 2).',
+    )
+    parser.add_argument(
+        '--variants', default=None, metavar='VARS',
+        help='Comma-separated confirmation variants to sweep, e.g. "k1:4.0,k2:3.5" (runs FP+FN head-to-head comparison).',
     )
     parser.add_argument(
         '--explain', default=None, metavar='WORD',
         help='Explain step-by-step model scoring and switch evaluation for a single word.',
     )
     args = parser.parse_args()
+
+    if args.confirmations < 1:
+        parser.error('--confirmations must be at least 1')
 
     # ── resolve data dir ──
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -829,7 +881,8 @@ def main():
     # ── explain single word ──
     if args.explain:
         explain_word(args.explain, data_dir=args.data_dir, baseline_delta=args.baseline_delta,
-                     mode=args.mode, req_confirmations=args.confirmations)
+                     mode=args.mode, req_confirmations=args.confirmations,
+                     en_model_path=args.en_model, he_model_path=args.he_model)
         return
 
     # ── resolve text file ──
@@ -872,22 +925,77 @@ def main():
         print(f'  EN model override: {args.en_model}')
     if args.he_model:
         print(f'  HE model override: {args.he_model}')
+
+    # ── variant comparison sweep ──
+    if args.variants:
+        var_specs = [v.strip() for v in args.variants.split(',') if v.strip()]
+        print("\n" + "=" * 108)
+        print(f" HEAD-TO-HEAD VARIANT COMPARISON: {args.lang.upper()} ({len(lines):,} lines, mode={args.mode}, jobs={args.jobs})")
+        print(f" Variants: {', '.join(var_specs)}")
+        print("=" * 108)
+
+        results = []
+        baseline_fp, baseline_fn = None, None
+
+        for spec in var_specs:
+            if ':' in spec:
+                k_part, d_part = spec.split(':', 1)
+                k = int(k_part.lower().lstrip('k'))
+                d = float(d_part)
+            else:
+                k = args.confirmations
+                d = float(spec)
+
+            common = dict(data_dir=args.data_dir, en_model_path=args.en_model,
+                          he_model_path=args.he_model, mode=args.mode, jobs=args.jobs,
+                          req_confirmations=k)
+            t0 = time.time()
+            fp = run_test('fp', lines, args.lang, d, **common)
+            fn = run_test('fn', lines, args.lang, d, **common)
+            elapsed = time.time() - t0
+
+            mean_l = statistics.mean(fn.latency_values) if fn.latency_values else 0.0
+            med_l = statistics.median(fn.latency_values) if fn.latency_values else 0.0
+
+            if baseline_fp is None:
+                baseline_fp, baseline_fn = fp.fp_per_1k, fn.fn_per_1k
+                d_fp_str, d_fn_str = "—", "—"
+            else:
+                d_fp = ((fp.fp_per_1k - baseline_fp) / baseline_fp * 100) if baseline_fp else 0.0
+                d_fn = ((fn.fn_per_1k - baseline_fn) / baseline_fn * 100) if baseline_fn else 0.0
+                d_fp_str = f"{d_fp:+.1f}%"
+                d_fn_str = f"{d_fn:+.1f}%"
+
+            results.append((spec, k, d, fp.words_tested, fp.fp_count, fp.fp_per_1k, d_fp_str,
+                            fn.words_not_switched, fn.fn_per_1k, d_fn_str, med_l, mean_l, elapsed))
+
+        print(f"\n{'variant':<10} {'K':>3} {'Δ':>5} {'Words':>10} {'FP':>6} {'FP/1k':>8} {'ΔFP%':>8} {'FN':>6} {'FN/1k':>8} {'ΔFN%':>8} {'Med':>6} {'Mean':>7} {'Time':>6}")
+        print("-" * 108)
+        for r in results:
+            print(f"{r[0]:<10} {r[1]:>3} {r[2]:>5.1f} {r[3]:>10,} {r[4]:>6,} {r[5]:>8.3f} {r[6]:>8} {r[7]:>6,} {r[8]:>8.3f} {r[9]:>8} {r[10]:>5.1f}c {r[11]:>6.2f}c {r[12]:>5.1f}s")
+        print("-" * 108)
+        return
+
     # ── run tests ──
+    print(f"\nConfiguration: Δ={args.baseline_delta}, K={args.confirmations}, mode={args.mode}, jobs={args.jobs}")
     model_override = args.en_model if args.lang == 'en' else args.he_model
     model_path = model_override if model_override else os.path.join(args.data_dir, f'{args.lang}_quadgrams.marisa')
     corpus_path = args.text_file
 
     common = dict(data_dir=args.data_dir, en_model_path=args.en_model,
                   he_model_path=args.he_model, mode=args.mode, jobs=args.jobs,
-                  scoring=args.scoring, req_confirmations=args.confirmations)
+                  req_confirmations=args.confirmations)
+
+    report_kwargs = dict(delta=args.baseline_delta, req_confirmations=args.confirmations,
+                          mode=args.mode, jobs=args.jobs)
 
     if args.test in ('fp', 'both'):
         fp = run_test('fp', lines, args.lang, args.baseline_delta, **common)
-        print_fp_report(fp, corpus_path, model_path, provenance)
+        print_fp_report(fp, corpus_path, model_path, provenance, **report_kwargs)
 
     if args.test in ('fn', 'both'):
         fn = run_test('fn', lines, args.lang, args.baseline_delta, **common)
-        print_fn_report(fn, corpus_path, model_path, provenance)
+        print_fn_report(fn, corpus_path, model_path, provenance, **report_kwargs)
 
 
 if __name__ == '__main__':

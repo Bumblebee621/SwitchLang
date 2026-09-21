@@ -4,19 +4,28 @@ word_length_analysis.py — measures how score gap and switch rates scale with w
 Investigates Arm C from EXPERIMENTS.md: does the English/Hebrew score gap grow with
 word length, and does it penalize long Hebrew words?
 
+The Arm C hypothesis claimed that because the models charge a different mean
+log-probability per character (en ~ -1.37, he ~ -1.65), subtracting one score from
+the other creates a per-character offset (+0.277 nats/char) that compounds with word
+length, pushing Hebrew typists out of Hebrew on long words.
+
 Three views of the run:
   1. Mean score gap by word length, with a straight-line fit per direction.
-     The slope is Arm C's per-character effect; the intercept is a flat offset.
+     The slope is Arm C's per-character effect; the intercept is a flat offset
+     that no length term would correct.
   2. Switch rate per 1,000 evaluations by prefix length.
-  3. First word of each line only, where delta is pinned at baseline.
+     Per evaluation, not per word: a 10-char word gets 9 chances to fire and a 3-char
+     word gets 2, so a per-word rate would rise on arithmetic alone.
+  3. First word of each line only, where delta is pinned at baseline instead
+     of climbing quadratically.
 
 Supports either:
-  - Shipped models: --use-shipped (evaluates data/*_quadgrams.marisa directly)
-  - Held-out K-fold models: --k 5 --fold 0 (built from compare_variants.py fold caches)
+  - Held-out K-fold models (recommended): --k 5 --fold 0 (built from compare_variants.py fold caches)
+  - Shipped models: --use-shipped (evaluates data/*_quadgrams.marisa directly; caution: train/test overlap)
 
 Usage:
-    python evaluation/word_length_analysis.py --use-shipped --max-test-lines 2000
     python evaluation/word_length_analysis.py --k 5 --fold 0
+    python evaluation/word_length_analysis.py --use-shipped --max-test-lines 2000
 """
 
 import argparse
@@ -251,13 +260,17 @@ def print_gap_table(title, en, he, delta):
         em = e[1] / e[0] if e[0] else 0.0
         ev = max(e[4] / e[0] - em * em, 0.0) if e[0] > 1 else 0.0
         esd = math.sqrt(ev)
-        esig = (delta - em) / esd if esd else 0.0
+        if esd < 1e-4:
+            esd = 0.0
+        esig = (delta - em) / esd if esd > 0.0 else 0.0
         eo = e[2] / e[0] * 1000 if e[0] else 0.0
 
         hm = h[1] / h[0] if h[0] else 0.0
         hv = max(h[4] / h[0] - hm * hm, 0.0) if h[0] > 1 else 0.0
         hsd = math.sqrt(hv)
-        hsig = (delta - hm) / hsd if hsd else 0.0
+        if hsd < 1e-4:
+            hsd = 0.0
+        hsig = (delta - hm) / hsd if hsd > 0.0 else 0.0
         ho = h[2] / h[0] * 1000 if h[0] else 0.0
 
         gap = hm - em if (e[0] and h[0]) else 0.0
@@ -265,8 +278,10 @@ def print_gap_table(title, en, he, delta):
               f'| {h[0]:>9,} {hm:>7.2f} {hsd:>6.2f} {hsig:>7.2f} {ho:>7.2f} | {gap:>7.2f}')
 
 
-def print_prefix_table(en, he):
-    print('\nTABLE 2 — switch rate per 1,000 evaluations, by characters typed')
+def print_prefix_table(en, he, req_confirmations=2):
+    print(f'\nTABLE 2 — switch rate per 1,000 evaluations by prefix length (K={req_confirmations} confirmations)')
+    print('  Note: Measured per evaluation, not per word (longer words have more chances to evaluate).')
+    print(f'  Walk requires K={req_confirmations} consecutive hits to fire, mirroring the live engine.')
     print(f'{"chars":>6} | {"EN evals":>11} {"EN sw":>6} {"per 1k":>7} '
           f'| {"HE evals":>11} {"HE sw":>6} {"per 1k":>7}')
     print('-' * 68)
@@ -291,8 +306,10 @@ def print_fits(en_stats, he_stats, en_h, he_h):
           f'intercept {he_int:+.3f}')
     print(f'  HE - EN     slope {he_slope - en_slope:+.4f} ± {diff_se:.4f} nats/char   '
           f'intercept {he_int - en_int:+.3f}')
-    print(f'\n  Table-mean log P(c4|c1c2c3):')
+    print('\n  Table-mean log P(c4|c1c2c3):')
     print(f'    en {en_h:+.4f} nats/char   he {he_h:+.4f}   offset {en_h - he_h:+.4f}')
+    print(f'\n  Arm C predicted slope: {en_h - he_h:+.4f} nats/char (empirical HE-EN slope is {he_slope - en_slope:+.4f})')
+    print('  Note: SE assumes independent words; use --batches for an empirical spread across disjoint slices.')
 
 
 def print_batches(harness, test_lines, delta, batches, req_confirmations=2):
@@ -357,6 +374,8 @@ def main():
 
     if args.use_shipped:
         print('Using shipped models from data/ …', flush=True)
+        print('WARNING: Evaluating shipped models against their own training corpus (NO HOLDOUT).', flush=True)
+        print('         Scores and gap slopes may be biased by in-sample attestation. Use K-fold for clean measurements.\n', flush=True)
         harness = EvaluationHarness(data_dir, req_confirmations=args.confirmations)
     else:
         os.makedirs(work_dir, exist_ok=True)
@@ -370,9 +389,12 @@ def main():
 
     test_lines = {}
     for lang in ('en', 'he'):
-        cap = args.max_test_lines if args.use_shipped else None
-        lines = load_corpus_lines(os.path.join(data_dir, f'{lang}_corpus.txt'), lang, cap=cap)
+        corpus_file = os.path.join(data_dir, f'{lang}_corpus.txt')
+        lines = load_corpus_lines(corpus_file, lang)
         if args.use_shipped:
+            # Slicing from the tail helps reduce direct overlap with the head of the training corpus
+            if args.max_test_lines:
+                lines = lines[-args.max_test_lines:]
             test_lines[lang] = lines
         else:
             test_lines[lang] = [l for i, l in enumerate(lines) if fold_of(i, args.k) == args.fold]
@@ -411,9 +433,10 @@ def main():
     print('=' * 88)
     print_gap_table('TABLE 1 — all words on the correct layout',
                     stats['en'].by_len, stats['he'].by_len, delta)
-    print(f'\n  mean = mean score_diff on delimiter evaluation. "σ to Δ" is how\n'
-          f'  many standard deviations the threshold sits above that mean.')
-    print_prefix_table(stats['en'].by_prefix, stats['he'].by_prefix)
+    print('\n  mean = mean score_diff on delimiter evaluation. "σ to Δ" is how\n'
+          '  many standard deviations the threshold sits above that mean.')
+    print_prefix_table(stats['en'].by_prefix, stats['he'].by_prefix,
+                       req_confirmations=args.confirmations)
     print_gap_table('TABLE 3 — first word of each line only (Δ pinned at baseline)',
                     stats['en'].first_word, stats['he'].first_word, delta)
     print_fits(stats['en'], stats['he'], en_h, he_h)
