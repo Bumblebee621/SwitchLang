@@ -46,6 +46,8 @@ data/calibration/
 data/combination_exp/
 !data/*_quadgrams.meta.json
 !data/*_quadgrams.marisa
+!data/*_char_gru.meta.json
+!data/*_char_gru.npz
 !data/collisions.json
 !data/icon.ico
 !data/icon.png

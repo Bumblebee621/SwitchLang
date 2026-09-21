@@ -123,20 +123,40 @@ def main():
     debug = config.get('debug_mode', False)
     set_debug_mode(debug)
 
-    try:
-        models = load_models(DATA_DIR, load_so=True)
-    except (FileNotFoundError, OSError, ValueError) as e:
-        sys.exit(
-            f"Error: Model files not found in {DATA_DIR} ({e}).\n"
-            "Please run 'python scripts/build_quadgrams.py' to generate them."
-        )
+    model_type = config.get('model_type', 'quadgram')
+    engine = None
 
-    engine = EvaluationEngine(
-        models['en'], models['he'], COLLISIONS_PATH,
-        storage_dir=STORAGE_DIR, enable_logging=debug,
-        en_so_model=models.get('so'),
-        model_mode=config.get('model_mode', 'standard')
-    )
+    if model_type == 'neural':
+        try:
+            from core.neural_model import load_neural_models
+            models = load_neural_models(DATA_DIR)
+            engine = EvaluationEngine(
+                models['en'], models['he'], COLLISIONS_PATH,
+                storage_dir=STORAGE_DIR, enable_logging=debug,
+                model_mode=config.get('model_mode', 'standard'),
+                model_type='neural'
+            )
+            logger.info("Loaded neural Char-GRU models successfully")
+        except Exception as e:
+            logger.warning(f"Could not load neural models ({e}), falling back to quadgrams")
+            model_type = 'quadgram'
+
+    if engine is None:
+        try:
+            models = load_models(DATA_DIR, load_so=True)
+        except (FileNotFoundError, OSError, ValueError) as e:
+            sys.exit(
+                f"Error: Model files not found in {DATA_DIR} ({e}).\n"
+                "Please run 'python scripts/build_quadgrams.py' to generate them."
+            )
+
+        engine = EvaluationEngine(
+            models['en'], models['he'], COLLISIONS_PATH,
+            storage_dir=STORAGE_DIR, enable_logging=debug,
+            en_so_model=models.get('so'),
+            model_mode=config.get('model_mode', 'standard'),
+            model_type='quadgram'
+        )
 
     sensitivity = SensitivityManager(
         baseline_delta=config.get('baseline_delta', 3.5),

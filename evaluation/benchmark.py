@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.engine import EvaluationEngine
 from core.quadgram import load_models, QuadgramModel
+from core.neural_model import load_neural_models, CharNeuralModel
 from core.sensitivity import SensitivityManager
 from core.keymap import shadow
 
@@ -109,21 +110,38 @@ class EvaluationHarness:
     """Replays text through the SwitchLang engine to measure accuracy."""
 
     def __init__(self, data_dir, en_model_path=None, he_model_path=None,
-                 mode='standard', req_confirmations=2):
-        models = load_models(data_dir, load_so=(mode == 'technical'))
-        # Allow overriding individual model files
-        if en_model_path:
-            models['en'] = QuadgramModel(en_model_path)
-        if he_model_path:
-            models['he'] = QuadgramModel(he_model_path)
-        collisions_path = os.path.join(data_dir, 'collisions.json')
-        self.engine = EvaluationEngine(
-            models['en'], models['he'],
-            collisions_path=collisions_path,
-            enable_logging=False,
-            en_so_model=models.get('so'),
-            model_mode=mode,
-        )
+                 mode='standard', req_confirmations=2, model_type='quadgram'):
+        self.model_type = model_type
+        if model_type == 'neural':
+            models = load_neural_models(data_dir)
+            if en_model_path:
+                models['en'] = CharNeuralModel(en_model_path)
+            if he_model_path:
+                models['he'] = CharNeuralModel(he_model_path)
+            collisions_path = os.path.join(data_dir, 'collisions.json')
+            self.engine = EvaluationEngine(
+                models['en'], models['he'],
+                collisions_path=collisions_path,
+                enable_logging=False,
+                model_mode=mode,
+                model_type='neural'
+            )
+        else:
+            models = load_models(data_dir, load_so=(mode == 'technical'))
+            # Allow overriding individual model files
+            if en_model_path:
+                models['en'] = QuadgramModel(en_model_path)
+            if he_model_path:
+                models['he'] = QuadgramModel(he_model_path)
+            collisions_path = os.path.join(data_dir, 'collisions.json')
+            self.engine = EvaluationEngine(
+                models['en'], models['he'],
+                collisions_path=collisions_path,
+                enable_logging=False,
+                en_so_model=models.get('so'),
+                model_mode=mode,
+                model_type='quadgram'
+            )
         self.req_confirmations = req_confirmations
 
     def _score_text_detailed(self, text, layout):
@@ -202,6 +220,60 @@ class EvaluationHarness:
 
         target_layout = 'he' if current_layout == 'en' else 'en'
         consecutive_hits = 0
+        if self.model_type == 'neural':
+            consecutive_hits = 0
+            for i in range(2, len(buf_active)):
+                partial_a = buf_active[:i + 1]
+                partial_s = buf_shadow[:i + 1]
+
+                eval_a = ' ' + partial_a
+                eval_s = ' ' + partial_s
+
+                if current_layout == 'en':
+                    score_a = self.engine.en_model.score(eval_a)
+                    score_s = self.engine.he_model.score(eval_s)
+                else:
+                    score_a = self.engine.he_model.score(eval_a)
+                    score_s = self.engine.en_model.score(eval_s)
+
+                diff = score_s - score_a
+                coll = self.engine.check_collision(partial_a, partial_s)
+                should = (diff > sensitivity.delta) if not coll else False
+                amb = (not should and diff > 0 and not coll)
+
+                if should:
+                    consecutive_hits += 1
+                    # Adaptive K: decisive score (> delta + 2.5) switches at K=1 (character 3!)
+                    effective_k = 1 if (diff > sensitivity.delta + 2.5) else self.req_confirmations
+                    if consecutive_hits >= effective_k:
+                        return WordResult(
+                            word=word, buffer_active=buf_active, buffer_shadow=buf_shadow,
+                            switched=True, switch_char_idx=i,
+                            score_diff=diff, is_colliding=coll, is_ambiguous=amb,
+                        )
+                else:
+                    consecutive_hits = 0
+
+            # Delimiter evaluation
+            eval_a = ' ' + buf_active + ' '
+            eval_s = ' ' + buf_shadow + ' '
+            if current_layout == 'en':
+                score_a_del = self.engine.en_model.score(eval_a)
+                score_s_del = self.engine.he_model.score(eval_s)
+            else:
+                score_a_del = self.engine.he_model.score(eval_a)
+                score_s_del = self.engine.en_model.score(eval_s)
+
+            diff = score_s_del - score_a_del
+            coll = self.engine.check_collision(buf_active, buf_shadow)
+            should = (diff > sensitivity.delta) if not coll else False
+            amb = (not should and diff > 0 and not coll)
+            return WordResult(
+                word=word, buffer_active=buf_active, buffer_shadow=buf_shadow,
+                switched=should, switch_char_idx=-1,
+                score_diff=diff, is_colliding=coll, is_ambiguous=amb,
+            )
+
         act_state = None
         shd_state = None
         diff = 0.0
@@ -531,9 +603,9 @@ atexit.register(shutdown_pool)
 
 def run_test(test, lines, lang, delta, data_dir, en_model_path=None,
              he_model_path=None, mode='standard', jobs=1,
-             req_confirmations=2):
+             req_confirmations=2, model_type='quadgram'):
     """Run the 'fp' or 'fn' test over *lines*, optionally across processes."""
-    key = (data_dir, en_model_path, he_model_path, mode, req_confirmations)
+    key = (data_dir, en_model_path, he_model_path, mode, req_confirmations, model_type)
 
     if jobs <= 1:
         harness = EvaluationHarness(*key)
@@ -866,6 +938,10 @@ def main():
         '--explain', default=None, metavar='WORD',
         help='Explain step-by-step model scoring and switch evaluation for a single word.',
     )
+    parser.add_argument(
+        '--model-type', choices=['quadgram', 'neural'], default='quadgram',
+        help='Model architecture to evaluate: quadgram (MARISA trie) or neural (Char-GRU).',
+    )
     args = parser.parse_args()
 
     if args.confirmations < 1:
@@ -975,14 +1051,18 @@ def main():
         return
 
     # ── run tests ──
-    print(f"\nConfiguration: Δ={args.baseline_delta}, K={args.confirmations}, mode={args.mode}, jobs={args.jobs}")
-    model_override = args.en_model if args.lang == 'en' else args.he_model
-    model_path = model_override if model_override else os.path.join(args.data_dir, f'{args.lang}_quadgrams.marisa')
+    print(f"\nConfiguration: Δ={args.baseline_delta}, K={args.confirmations}, model={args.model_type}, mode={args.mode}, jobs={args.jobs}")
+    if args.model_type == 'neural':
+        model_override = args.en_model if args.lang == 'en' else args.he_model
+        model_path = model_override if model_override else os.path.join(args.data_dir, f'{args.lang}_char_gru.npz')
+    else:
+        model_override = args.en_model if args.lang == 'en' else args.he_model
+        model_path = model_override if model_override else os.path.join(args.data_dir, f'{args.lang}_quadgrams.marisa')
     corpus_path = args.text_file
 
     common = dict(data_dir=args.data_dir, en_model_path=args.en_model,
                   he_model_path=args.he_model, mode=args.mode, jobs=args.jobs,
-                  req_confirmations=args.confirmations)
+                  req_confirmations=args.confirmations, model_type=args.model_type)
 
     report_kwargs = dict(delta=args.baseline_delta, req_confirmations=args.confirmations,
                           mode=args.mode, jobs=args.jobs)

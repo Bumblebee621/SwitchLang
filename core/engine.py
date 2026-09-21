@@ -23,22 +23,24 @@ class EvaluationEngine:
     MAX_CSV_LINES = 10000
 
     def __init__(self, en_model, he_model, collisions_path=None, storage_dir=None, 
-                 enable_logging=True, en_so_model=None, model_mode='standard'):
-        """Initialize with quadgram models and optional collision set.
+                 enable_logging=True, en_so_model=None, model_mode='standard', model_type='quadgram'):
+        """Initialize with quadgram or neural models and optional collision set.
 
         Args:
-            en_model: QuadgramModel for Standard English.
-            he_model: QuadgramModel for Hebrew.
+            en_model: QuadgramModel or CharNeuralModel for Standard English.
+            he_model: QuadgramModel or CharNeuralModel for Hebrew.
             collisions_path: Path to collisions.json (shadow-collision set).
             storage_dir: Base directory for stats and logs.
             enable_logging: Whether to log decisions to a CSV file.
             en_so_model: Optional QuadgramModel for Stack Overflow English.
             model_mode: 'standard', 'smart', or 'technical'.
+            model_type: 'quadgram' or 'neural'.
         """
         self.en_model = en_model
         self.he_model = he_model
         self.en_so_model = en_so_model
         self.model_mode = model_mode
+        self.model_type = model_type
         self.enable_logging = enable_logging
 
         self.collisions = set()
