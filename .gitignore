@@ -35,7 +35,6 @@ venv.bak/
 config.json
 switchlang.log*
 *.csv
-evaluation/compare_v109_current.py
 data/*.txt
 data/*.gz
 data/*.json
@@ -68,5 +67,4 @@ Thumbs.db
 
 # testing and optimization
 evaluation/*.txt
-testing quadgram distances/
-quadgram_sampling_experiment/
+testing quadgram distances/*.txt

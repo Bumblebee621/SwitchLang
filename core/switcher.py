@@ -56,19 +56,11 @@ class KEYBDINPUT(ctypes.Structure):
         ('dwExtraInfo', ctypes.POINTER(ctypes.c_ulong)),
     ]
 
-class HARDWAREINPUT(ctypes.Structure):
-    _fields_ = [
-        ('uMsg', wintypes.DWORD),
-        ('wParamL', wintypes.WORD),
-        ('wParamH', wintypes.WORD),
-    ]
-
 class INPUT(ctypes.Structure):
     class _INPUT_UNION(ctypes.Union):
         _fields_ = [
             ('ki', KEYBDINPUT),
             ('mi', MOUSEINPUT),
-            ('hi', HARDWAREINPUT),
         ]
 
     _fields_ = [
@@ -152,8 +144,6 @@ def send_vk_key(vk, shift=False):
         inputs.append(_make_key_input(vk=VK_SHIFT, flags=KEYEVENTF_KEYUP))
     _send_inputs(inputs)
 
-
-send_vk_key_with_modifiers = send_vk_key
 
 
 def send_string_as_keys(text, layout):
@@ -328,15 +318,11 @@ def execute_switch(buffer_active, buffer_shadow,
                            or None for mid-word triggers.
         fix_caps: If True, toggle Caps Lock off during the correction.
     """
-    # Determine if the trigger delimiter needs a real VK event.
-    # Apps like Discord/Chrome require a real VK_RETURN to send a message;
-    # a Unicode '\n' injected via KEYEVENTF_UNICODE is silently ignored.
+    # Discord/Chrome require real VK_RETURN to send messages; Unicode '\n' is ignored.
     needs_vk_return = (trigger_delimiter == '\n')
 
     if correction_block:
-        # Erase: trigger word (minus trigger char if mid-word) +
-        #        each ambiguous word and the delimiter after it.
-        # (If trigger_delimiter is set, it was blocked, so it's not in the OS buffer)
+        # Erase trigger word (minus mid-word trigger char) plus ambiguous chain words and delimiters.
         erase_len = len(buffer_active)
         if trigger_delimiter is None:
             erase_len -= 1

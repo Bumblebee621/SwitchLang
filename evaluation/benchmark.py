@@ -35,9 +35,7 @@ from dataclasses import dataclass, field, fields
 if sys.stdout.encoding != 'utf-8':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
-# ---------------------------------------------------------------------------
 # Project imports
-# ---------------------------------------------------------------------------
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.engine import EvaluationEngine

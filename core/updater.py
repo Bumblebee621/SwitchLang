@@ -4,11 +4,10 @@ updater.py — Logic for checking and downloading updates from GitHub.
 
 import json
 import os
-import sys
 import subprocess
 import tempfile
 import urllib.request
-from core.version import __version__
+from core import __version__
 
 REPO = "Bumblebee621/SwitchLang"
 GITHUB_API_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
@@ -81,10 +80,7 @@ def download_and_install(url, progress_callback=None):
                     if progress_callback:
                         progress_callback(downloaded, total_size)
                         
-        # Launch the installer and forcefully exit
-        # Using os._exit(0) instead of sys.exit(0) to ensure the process
-        # is fully terminated and the exe file is released before the
-        # installer tries to replace it.
+        # Use os._exit(0) instead of sys.exit(0) to release exe file lock immediately before installer runs.
         import time
         subprocess.Popen([installer_path, "/SILENT"])
         time.sleep(1)

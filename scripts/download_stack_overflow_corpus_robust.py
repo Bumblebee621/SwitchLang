@@ -14,9 +14,7 @@ def build_clean_corpus_robust(url, output_txt_path, sample_rate=100, target_size
     req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
     response = urllib.request.urlopen(req)
 
-    # A multi-byte character can straddle a chunk boundary, so decode
-    # incrementally — decoding each chunk on its own would turn the split
-    # character into U+FFFD and silently corrupt the corpus.
+    # Decode incrementally so multi-byte UTF-8 chars split across chunk boundaries aren't corrupted.
     decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
 
     # Regex to find complete <row> tags

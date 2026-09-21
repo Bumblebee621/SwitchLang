@@ -76,11 +76,6 @@ VK_TAB = 0x09
 VK_CAPITAL = 0x14
 VK_A = 0x41   # Used for Ctrl+A CRE
 
-MODIFIER_VKS = {
-    VK_SHIFT, VK_LSHIFT, VK_RSHIFT,
-    VK_CONTROL, VK_LCONTROL, VK_RCONTROL,
-    VK_MENU, VK_LMENU, VK_RMENU,
-}
 
 # Delimiters trigger word-level evaluation
 DELIMITER_VKS = {VK_SPACE, VK_RETURN}
@@ -236,7 +231,6 @@ class HookManager:
         self._ctrl_pressed = False
         self._alt_pressed = False
         self._letter_shift_history = []
-        self._on_switch_callback = None
 
         # PERFORMANCE optimization: Cache expensive Windows API results.
         # These are updated on a slow 100ms polling thread.
@@ -247,9 +241,7 @@ class HookManager:
         # Model Mode Selection: 'standard', 'smart', or 'technical'
         self.model_mode = config.get('model_mode', 'standard')
 
-        # Suspension: user-configurable hotkey to temporarily disable the engine.
-        # suspend_keybind is a frozenset of VK codes (e.g. {VK_CONTROL, 0x7B} for Ctrl+F12).
-        # Empty set = feature not configured.
+        # Suspension hotkey (frozenset of VK codes, e.g. Ctrl+F12, or empty if disabled).
         self._suspend_keybind = frozenset(
             config.get('suspend_keybind_vks', [])
         )
@@ -269,9 +261,6 @@ class HookManager:
         self.engine.set_enable_logging(enabled)
         logger.info('Debug Mode %s', 'enabled' if enabled else 'disabled')
 
-    def set_on_switch_callback(self, callback):
-        """Set a callback for when a layout switch occurs (e.g. for UI sounds)."""
-        self._on_switch_callback = callback
 
     def set_on_suspend_callback(self, callback):
         """Set a callback for when the engine is suspended/resumed (e.g. for UI)."""
@@ -676,11 +665,8 @@ class HookManager:
                 fix_caps=caps_fix,
             )
 
-            # Drain pending_queue and inject/integrate while still locked.
-            # This guarantees no keys are lost (they're all either drained
-            # here or will arrive after is_correcting is False and go through
-            # normal _handle_keypress).
-            from core.switcher import send_string_as_keys, send_vk_key_with_modifiers
+            # Drain pending_queue while locked so keystrokes typed during correction are not lost.
+            from core.switcher import send_string_as_keys, send_vk_key
             text_to_inject = ""
             consumed_items = []
             while self.pending_queue:
@@ -697,7 +683,7 @@ class HookManager:
                         send_string_as_keys(text_to_inject, target)
                         text_to_inject = ""
                     # Replay non-printable keys using explicit VK event
-                    send_vk_key_with_modifiers(q_vk, shift=q_shift)
+                    send_vk_key(q_vk, shift=q_shift)
 
             if text_to_inject:
                 send_string_as_keys(text_to_inject, target)
@@ -735,8 +721,6 @@ class HookManager:
             self.is_correcting = False
 
 
-        if self._on_switch_callback:
-            self._on_switch_callback()
 
     # -------------------------------------------------------------------------
     # SECTION 4: LOW-LEVEL HOOK ENGINE (Message Pumps & Threads)

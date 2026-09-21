@@ -131,12 +131,6 @@ class SystemTrayApp(QSystemTrayIcon):
     @pyqtSlot(bool)
     def _handle_suspension(self, suspended):
         """Actual UI update logic running on the main thread."""
-        # Update Tray Icon
-        if self._icon_path and os.path.exists(self._icon_path):
-            pass
-        else:
-            self.setIcon(QIcon(_create_tray_icon_pixmap()))
-
         if suspended:
             dur = self.hook_manager._suspend_duration
             self.osd.show_status(

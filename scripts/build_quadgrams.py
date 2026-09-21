@@ -55,16 +55,12 @@ def _process_chunk(lines, allowed_chars=None):
 
         words = line.split()
         for word in words:
-            # Word-level purity check:
-            # If a word contains characters outside the allowed set, discard it.
-            # This ensures the model isn't poisoned by foreign scripts or noise.
+            # Discard words containing characters outside the allowed set to prevent model poisoning.
             if allowed_chars is not None:
                 if any(ch not in allowed_chars for ch in word):
                     continue
                 
-                # Nikud (vocalization) filter for Hebrew:
-                # Discard entire words containing Hebrew nikud/vocalization marks 
-                # (Unicode range \u0591 to \u05C7).
+                # Discard words containing Hebrew nikud (vocalization marks \u0591-\u05C7).
                 if any('\u0591' <= ch <= '\u05C7' for ch in word):
                     continue
 
@@ -222,10 +218,7 @@ def save_model_data_to_trie(data, output_trie_path, output_meta_path):
     return True
 
 
-# Allowed character sets for each language to ensure model purity.
-# We include standard English/Hebrew letters and common punctuation.
-# We explicitly EXCLUDE numbers and accented characters (like è, é) to 
-# keep the models focused on the primary layout scripts.
+# Allowed characters per language, excluding numbers and accented letters to keep models focused.
 ALLOWED_EN = set("abcdefghijklmnopqrstuvwxyz `~!@#$%^&*()-_=+[{]}\\|;:'\",<.>/?")
 ALLOWED_HE = set("אבגדהוזחטיכלמנסעפצקרשתםןץףך `~!@#$%^&*()-_=+[{]}\\|;:'\",<.>/?")
 

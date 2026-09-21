@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QCheckBox, QSlider, QPushButton, QLineEdit,
     QListWidget, QGroupBox, QFrame, QSizePolicy, QMessageBox,
-    QScrollArea, QSpinBox, QProgressBar, QDialog, QRadioButton
+    QScrollArea, QSpinBox, QProgressDialog, QRadioButton
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread
 from PyQt6.QtGui import QFont, QIcon, QKeyEvent
@@ -80,27 +80,6 @@ class DownloadWorker(QThread):
         except Exception as e:
             self.error.emit(str(e))
 
-
-class ProgressDialog(QDialog):
-    """Simple dialog showing download progress."""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Downloading Update")
-        self.setFixedSize(300, 100)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
-        
-        layout = QVBoxLayout(self)
-        self.label = QLabel("Downloading SwitchLang...")
-        layout.addWidget(self.label)
-        
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        layout.addWidget(self.progress_bar)
-
-    def set_progress(self, current, total):
-        if total > 0:
-            val = int((current / total) * 100)
-            self.progress_bar.setValue(val)
 
 
 class SettingsWindow(QMainWindow):
@@ -533,11 +512,19 @@ class SettingsWindow(QMainWindow):
 
     def _start_download(self, url):
         """Start downloading the update."""
-        self._progress_dialog = ProgressDialog(self)
+        self._progress_dialog = QProgressDialog("Downloading SwitchLang...", None, 0, 100, self)
+        self._progress_dialog.setWindowTitle("Downloading Update")
+        self._progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        self._progress_dialog.setCancelButton(None)
+        self._progress_dialog.setMinimumDuration(0)
         self._progress_dialog.show()
 
+        def _on_progress(current, total):
+            if total > 0:
+                self._progress_dialog.setValue(int((current / total) * 100))
+
         self._download_worker = DownloadWorker(url)
-        self._download_worker.progress.connect(self._progress_dialog.set_progress)
+        self._download_worker.progress.connect(_on_progress)
         self._download_worker.error.connect(self._on_download_error)
         self._download_worker.start()
 

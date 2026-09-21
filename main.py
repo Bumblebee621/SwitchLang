@@ -69,7 +69,7 @@ from core.engine import EvaluationEngine
 from core.sensitivity import SensitivityManager
 from core.blacklist import BlacklistManager
 from core.hooks import HookManager
-from core.version import __version__
+from core import __version__
 from ui.tray import SystemTrayApp
 from ui.settings_window import SettingsWindow
 

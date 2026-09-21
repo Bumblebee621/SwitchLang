@@ -7,7 +7,7 @@ This script compiles the executable with PyInstaller and invokes Inno Setup to c
 import os
 import subprocess
 import sys
-from core.version import __version__
+from core import __version__
 
 
 def run_command(command, description):

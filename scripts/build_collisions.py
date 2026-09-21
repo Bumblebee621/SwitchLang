@@ -35,9 +35,7 @@ HE_TO_EN = {
     'ג': 'd', 'כ': 'f', 'ע': 'g', 'י': 'h', 'ח': 'j',
     'ל': 'k', 'ך': 'l', 'ז': 'z', 'ס': 'x', 'ב': 'c',
     'ה': 'v', 'נ': 'b', 'מ': 'n', 'צ': 'm',
-    # ת → ',' and ץ → '.' are excluded: they map to punctuation,
-    # so any Hebrew word containing them can never shadow an alpha-only
-    # English word and will be skipped automatically.
+    # ת/ץ map to punctuation (,/.) so words containing them cannot shadow alpha-only English words.
 }
 
 

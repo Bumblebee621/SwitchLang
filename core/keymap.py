@@ -18,10 +18,7 @@ EN_TO_HE = {
     ';': 'ף',  '\'': ',',
 }
 
-# Shifted keys
-# NOTE: Hebrew has no letter case, so Shift+letter produces the same Hebrew
-# letter as unshifted. Q->/ and W->\' are also identical to unshifted because
-# those punctuation keys don't change under Shift on the Israeli keyboard.
+# Shifted keys: Hebrew has no uppercase, and Israeli Q/W punctuation does not change under Shift.
 EN_TO_HE_SHIFT = {
     'Q': '/',  'W': '\'', 'E': 'ק',  'R': 'ר',  'T': 'א',
     'Y': 'ט',  'U': 'ו',  'I': 'ן',  'O': 'ם',  'P': 'פ',
