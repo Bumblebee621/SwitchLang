@@ -29,15 +29,16 @@ HE_CHARS = list(" אבגדהוזחטיכלמנסעפצקרשתךםןףץ01234567
 
 
 class CharGRU(nn.Module):
-    """Compact 1-layer character GRU language model."""
+    """Compact 1-layer character GRU language model with dropout regularization."""
 
-    def __init__(self, vocab_size, emb_dim=32, hidden_dim=48):
+    def __init__(self, vocab_size, emb_dim=32, hidden_dim=48, dropout=0.1):
         super().__init__()
         self.vocab_size = vocab_size
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
 
         self.emb = nn.Embedding(vocab_size, emb_dim, padding_idx=0)
+        self.drop = nn.Dropout(dropout)
         self.gru = nn.GRU(emb_dim, hidden_dim, batch_first=True)
         self.fc = nn.Linear(hidden_dim, vocab_size)
 
@@ -52,8 +53,9 @@ class CharGRU(nn.Module):
             logits: Tensor of shape (batch, seq_len, vocab_size)
             h_n: Final hidden state
         """
-        embeds = self.emb(x)
+        embeds = self.drop(self.emb(x))
         out, h_n = self.gru(embeds, h)
+        out = self.drop(out)
         logits = self.fc(out)
         return logits, h_n
 
@@ -139,9 +141,9 @@ def train_model(words, lang='en', emb_dim=32, hidden_dim=48, epochs=4, batch_siz
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=pad_collate)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = CharGRU(vocab_size, emb_dim, hidden_dim).to(device)
+    model = CharGRU(vocab_size, emb_dim, hidden_dim, dropout=0.1).to(device)
     criterion = nn.CrossEntropyLoss(ignore_index=0)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
 
     model.train()
     start_time = time.time()
