@@ -3,7 +3,7 @@
 
 #define MyAppName "SwitchLang"
 #ifndef MyAppVersion
-#define MyAppVersion "1.0.9"
+#define MyAppVersion "1.2.0"
 #endif
 #define MyAppPublisher "Ariel Assis"
 #define MyAppExeName "SwitchLang.exe"

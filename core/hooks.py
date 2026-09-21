@@ -235,6 +235,7 @@ class HookManager:
         self._shift_pressed = False
         self._ctrl_pressed = False
         self._alt_pressed = False
+        self._letter_shift_history = []
         self._on_switch_callback = None
 
         # PERFORMANCE optimization: Cache expensive Windows API results.
@@ -366,6 +367,15 @@ class HookManager:
         self.buffer_active = ''
         self.buffer_shadow = ''
         self._consecutive_midword_hits = 0
+        self._letter_shift_history.clear()
+
+    def _is_all_shift_word(self):
+        """True if all letters in the current word were typed with Shift (and Caps Lock is off)."""
+        return bool(
+            not _is_caps_lock_on()
+            and self._letter_shift_history
+            and all(s for _, s in self._letter_shift_history)
+        )
 
     def _clear_history(self):
         """Clear the lookback history.
@@ -481,6 +491,8 @@ class HookManager:
             if self.buffer_active:
                 self.buffer_active = self.buffer_active[:-1]
                 self.buffer_shadow = self.buffer_shadow[:-1]
+                while self._letter_shift_history and self._letter_shift_history[-1][0] >= len(self.buffer_active):
+                    self._letter_shift_history.pop()
             elif self.history_deque:
                 # Cross-boundary backspace: the user is deleting the delimiter
                 # that separated the current (empty) word from the previous one.
@@ -503,6 +515,12 @@ class HookManager:
 
             if self.buffer_active:
                 current = self._cached_layout
+
+                # In Hebrew layout, typing an English word using Shift is intentional.
+                if current == 'he' and self._is_all_shift_word():
+                    self._clear_buffers()
+                    self.sensitivity.on_word_complete()
+                    return False
 
                 # When Hebrew layout + Caps Lock, screen shows English.
                 # Buffers already reflect this (set in step 5), so evaluate as English.
@@ -544,6 +562,9 @@ class HookManager:
         if en_char is None:
             return False
 
+        if 0x41 <= vk_code <= 0x5A:
+            self._letter_shift_history.append((len(self.buffer_active), self._shift_pressed))
+
         current = self._cached_layout
 
         # When Hebrew layout + Caps Lock, Windows outputs English on screen.
@@ -559,6 +580,9 @@ class HookManager:
 
         # Only run mid-word scoring after 3+ characters to avoid false switches.
         if len(self.buffer_active) >= 3:
+            if current == 'he' and self._is_all_shift_word():
+                return False
+
             should_switch, diff, is_colliding, is_ambiguous = self._evaluate_current(
                 effective_layout, on_delimiter=False
             )
