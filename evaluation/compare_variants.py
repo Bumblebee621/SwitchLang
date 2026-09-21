@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'scripts'))
 
 from benchmark import load_corpus_lines, run_test
-from build_quadgrams import ALLOWED_EN, ALLOWED_HE, build_quadgrams_from_lines
+from build_quadgrams import ALLOWED_EN, ALLOWED_HE, build_quadgrams_from_lines, save_model_data_to_trie
 
 ALLOWED = {'en': ALLOWED_EN, 'he': ALLOWED_HE}
 
@@ -47,8 +47,6 @@ def _prune(min_count):
 
 
 # name -> callable(raw_model_dict) -> model_dict.
-# Scoring-time arms (interpolated smoothing, per-model calibration) will need a
-# second hook here for a model class; see evaluation/EXPERIMENTS.md.
 VARIANTS = {
     'unpruned': lambda m: m,
     'prune2': _prune(2),   # what build_quadgrams.py currently ships
@@ -112,17 +110,12 @@ def merge_parts(parts, skip):
     return merged
 
 
-def write_variant(model, transform, path):
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(transform(model), f, ensure_ascii=False)
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # RUN
 # ═══════════════════════════════════════════════════════════════════════════
 
 def run_fold(parts, lines, lang, fold, k, variants, cache_dir, data_dir, delta,
-             jobs, max_test_lines):
+             jobs, max_test_lines, req_confirmations=2):
     """Return {variant: (fp_per_1k, fn_per_1k, mean_latency)} for one fold."""
     raw = merge_parts(parts, fold)
     test = [l for i, l in enumerate(lines) if fold_of(i, k) == fold]
@@ -131,16 +124,22 @@ def run_fold(parts, lines, lang, fold, k, variants, cache_dir, data_dir, delta,
 
     results = {}
     for name in variants:
-        var_path = os.path.join(cache_dir, f'{lang}_k{k}_f{fold}_{name}.json')
-        write_variant(raw, VARIANTS[name], var_path)
+        var_trie = os.path.join(cache_dir, f'{lang}_k{k}_f{fold}_{name}.marisa')
+        var_meta = os.path.join(cache_dir, f'{lang}_k{k}_f{fold}_{name}.meta.json')
+        save_model_data_to_trie(VARIANTS[name](raw), var_trie, var_meta)
 
-        kwargs = {'en_model_path': var_path} if lang == 'en' else {'he_model_path': var_path}
-        fp = run_test('fp', test, lang, delta, data_dir, jobs=jobs, **kwargs)
-        fn = run_test('fn', test, lang, delta, data_dir, jobs=jobs, **kwargs)
+        kwargs = {'en_model_path': var_trie} if lang == 'en' else {'he_model_path': var_trie}
+        fp = run_test('fp', test, lang, delta, data_dir, jobs=jobs,
+                      req_confirmations=req_confirmations, **kwargs)
+        fn = run_test('fn', test, lang, delta, data_dir, jobs=jobs,
+                      req_confirmations=req_confirmations, **kwargs)
         latency = statistics.mean(fn.latency_values) if fn.latency_values else 0.0
         results[name] = (fp.fp_per_1k, fn.fn_per_1k, latency)
 
-        os.remove(var_path)
+        if os.path.exists(var_trie):
+            os.remove(var_trie)
+        if os.path.exists(var_meta):
+            os.remove(var_meta)
 
     return results
 
@@ -187,7 +186,9 @@ def main():
     parser.add_argument('--max-test-lines', type=int, default=75_000,
                         help='Cap lines scored per fold (default: 75000).  Training '
                              'still uses every line outside the fold.')
-    parser.add_argument('--baseline-delta', type=float, default=4.0)
+    parser.add_argument('--baseline-delta', type=float, default=3.5)
+    parser.add_argument('--confirmations', type=int, default=2,
+                        help='Number of consecutive confirmations required for switch (default: 2).')
     parser.add_argument('--data-dir', default=default_data,
                         help='Directory holding the reference models and collisions.json.')
     parser.add_argument('--corpus-dir', default=None,
@@ -230,7 +231,7 @@ def main():
         per_fold = [
             run_fold(parts, lines, lang, fold, args.k, variants, args.cache_dir,
                      args.data_dir, args.baseline_delta, args.jobs,
-                     args.max_test_lines)
+                     args.max_test_lines, req_confirmations=args.confirmations)
             for fold in range(args.k)
         ]
         print_table(lang, per_fold, variants, args.baseline_variant)
