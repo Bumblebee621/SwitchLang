@@ -290,6 +290,22 @@ class HookManager:
         else:
             logger.warning('Invalid model mode ignored: %r', mode)
 
+    def apply_config(self, config_data):
+        """Apply new configuration values at runtime."""
+        self.set_enabled(config_data.get('enabled', True))
+        self.set_debug_mode(config_data.get('debug_mode', False))
+        self.idle_timeout = config_data.get('idle_timeout_seconds', 15.0)
+        self.sensitivity.update_config(
+            baseline_delta=config_data.get('baseline_delta', 3.5),
+            alpha=config_data.get('sensitivity_alpha', 0.3)
+        )
+        self.set_suspend_config(
+            config_data.get('suspend_keybind_vks', []),
+            config_data.get('suspend_duration_sec', 60),
+            config_data.get('suspend_switch_layout', False)
+        )
+        self.set_model_mode(config_data.get('model_mode', 'standard'))
+
     @property
     def is_suspended(self):
         """True if the engine is currently in a temporary suspension."""

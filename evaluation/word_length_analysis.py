@@ -353,13 +353,13 @@ def main():
     cache_dir = os.path.join(project_root, args.cache_dir)
     work_dir = os.path.join(project_root, args.work_dir)
 
-    os.makedirs(work_dir, exist_ok=True)
     delta = args.baseline_delta
 
     if args.use_shipped:
         print('Using shipped models from data/ …', flush=True)
         harness = EvaluationHarness(data_dir, req_confirmations=args.confirmations)
     else:
+        os.makedirs(work_dir, exist_ok=True)
         print('Staging held-out models …', flush=True)
         paths = {lang: build_fold_model(lang, cache_dir, work_dir, args.k, args.fold)
                  for lang in ('en', 'he')}

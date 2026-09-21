@@ -2,12 +2,11 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "SwitchLang"
+#ifndef MyAppVersion
 #define MyAppVersion "1.0.9"
+#endif
 #define MyAppPublisher "Ariel Assis"
 #define MyAppExeName "SwitchLang.exe"
-#define MyAppAssocName MyAppName + ""
-#define MyAppAssocExt ".exe"
-#define MyAppAssocKey StringChange(MyAppAssocName, " ", "") + MyAppAssocExt
 
 [Setup]
 ; NOTE: The value of AppId uniquely identifies this application. Do not use the same AppId value in installers for other applications.
@@ -15,10 +14,8 @@
 AppId={{D1F4C7B2-85E2-4EBA-9D8B-5F9B7C3E2A1A}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
-;AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\{#MyAppName}
-ChangesAssociations=yes
 DisableProgramGroupPage=yes
 ; Run in non administrative install mode (install for current user only.)
 PrivilegesRequired=lowest

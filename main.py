@@ -12,44 +12,25 @@ import os
 import sys
 import ctypes
 import signal
-from ctypes import wintypes
- 
+
 # Global handle for the single-instance mutex
 _mutex_handle = None
 
 # Configure PyInstaller paths
-if getattr(sys, 'frozen', False):
-    BUNDLE_DIR = sys._MEIPASS
-    APP_DIR = os.path.dirname(sys.executable)
-else:
-    BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
-    APP_DIR = BUNDLE_DIR
+BUNDLE_DIR = sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
 
 # Keep user data in APPDATA (or ~/.config on non-Windows)
 STORAGE_DIR = os.path.join(os.getenv('APPDATA') or os.path.expanduser('~/.config'), 'SwitchLang')
-
-# Ensure storage directory exists
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
-
-# Custom formatter that trims the logger name to only its last segment
-# (e.g. 'switchlang.hooks' -> 'hooks', 'core.engine' -> 'engine')
-class _ShortNameFormatter(logging.Formatter):
-    def format(self, record):
-        record.shortname = record.name.rsplit('.', 1)[-1]
-        return super().format(record)
-
-_LOG_FORMAT = '%(asctime)s [%(shortname)s] %(levelname)s: %(message)s'
+_LOG_FORMAT = '%(asctime)s [%(name)s] %(levelname)s: %(message)s'
 _LOG_DATE_FORMAT = '%m-%d %H:%M:%S'
 _log_file_handler = None   # Lazy-created when debug mode is enabled
 
-_console_formatter = _ShortNameFormatter(_LOG_FORMAT, datefmt=_LOG_DATE_FORMAT)
-_console_handler = logging.StreamHandler(sys.stdout)
-_console_handler.setFormatter(_console_formatter)
-
 logging.basicConfig(
     level=logging.WARNING,
-    handlers=[_console_handler]
+    format=_LOG_FORMAT,
+    datefmt=_LOG_DATE_FORMAT
 )
 logger = logging.getLogger('switchlang')
 
@@ -57,30 +38,28 @@ logger = logging.getLogger('switchlang')
 def set_debug_mode(enabled):
     """Toggle expressive logging (file + DEBUG level) on or off.
 
-    When *enabled* is True, attaches a RotatingFileHandler to the root
-    logger and drops every ``switchlang.*`` logger to DEBUG.  When False,
-    removes the file handler and restores WARNING level so the app stays
-    completely silent on disk.
+    When enabled is True, attaches a RotatingFileHandler to the root
+    logger and drops level to DEBUG. When False, removes the file handler
+    and restores WARNING level so disk output remains silent.
     """
     global _log_file_handler
     root = logging.getLogger()
 
     if enabled:
-        # Attach file handler (once)
         if _log_file_handler is None:
             _log_file_handler = logging.handlers.RotatingFileHandler(
                 os.path.join(STORAGE_DIR, 'switchlang.log'),
                 maxBytes=200 * 1024, backupCount=1, encoding='utf-8'
             )
-            _log_file_handler.setFormatter(_ShortNameFormatter(_LOG_FORMAT, datefmt=_LOG_DATE_FORMAT))
+            _log_file_handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATE_FORMAT))
         if _log_file_handler not in root.handlers:
             root.addHandler(_log_file_handler)
         root.setLevel(logging.DEBUG)
     else:
-        # Remove file handler and silence disk output
         if _log_file_handler and _log_file_handler in root.handlers:
             root.removeHandler(_log_file_handler)
         root.setLevel(logging.WARNING)
+
 
 from PyQt6.QtCore import QDir, QTimer
 from PyQt6.QtWidgets import QApplication
@@ -88,7 +67,7 @@ from PyQt6.QtWidgets import QApplication
 from core.quadgram import load_models
 from core.engine import EvaluationEngine
 from core.sensitivity import SensitivityManager
-from core.blacklist import BlacklistManager, DEFAULT_BLACKLIST
+from core.blacklist import BlacklistManager
 from core.hooks import HookManager
 from core.version import __version__
 from ui.tray import SystemTrayApp
@@ -101,104 +80,42 @@ COLLISIONS_PATH = os.path.join(DATA_DIR, 'collisions.json')
 
 
 def load_config():
-    """Load configuration from config.json.
-
-    Returns:
-        Dict of configuration values.
-    """
+    """Load configuration from config.json."""
     if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {
-        'enabled': True,
-        'baseline_delta': 3.5,
-        'sensitivity_alpha': 0.3,
-        'idle_timeout_seconds': 5.0,
-        'debug_mode': False,
-        'blacklist': sorted(list(DEFAULT_BLACKLIST))
-    }
+        try:
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
 
 
-def load_stylesheet():
-    """Load the QSS stylesheet.
-
-    Returns:
-        QSS string or empty string if file not found.
-    """
-    if os.path.exists(STYLE_PATH):
-        with open(STYLE_PATH, 'r', encoding='utf-8') as f:
-            return f.read()
-    return ''
-
-
-def check_data_files():
-    """Verify that required quadgram binary model files exist."""
-    en_path = os.path.join(DATA_DIR, 'en_quadgrams.marisa')
-    he_path = os.path.join(DATA_DIR, 'he_quadgrams.marisa')
-
-    if not os.path.exists(en_path) or not os.path.exists(he_path):
-        sys.exit(
-            f"Error: Model files not found in {DATA_DIR}.\n"
-            "Please run 'python scripts/build_quadgrams.py' to generate them."
-        )
-
-
-def on_settings_changed(config_data, hook_manager, sensitivity, engine):
-    """Handle settings changes from the UI.
-
-    Args:
-        config_data: New configuration dict.
-        hook_manager: HookManager instance.
-        sensitivity: SensitivityManager instance.
-        engine: EvaluationEngine instance.
-    """
-    debug = config_data.get('debug_mode', False)
-    set_debug_mode(debug)
-    hook_manager.set_enabled(config_data.get('enabled', True))
-    hook_manager.set_debug_mode(debug)
-    sensitivity.update_config(
-        baseline_delta=config_data.get('baseline_delta', 3.5),
-        alpha=config_data.get('sensitivity_alpha', 0.3)
-    )
-    hook_manager.idle_timeout = config_data.get(
-        'idle_timeout_seconds', 5.0
-    )
-    # Suspension Config
-    hook_manager.set_suspend_config(
-        config_data.get('suspend_keybind_vks', []),
-        config_data.get('suspend_duration_sec', 60),
-        config_data.get('suspend_switch_layout', False)
-    )
-    # Model Mode
-    mode = config_data.get('model_mode', 'standard')
-    engine.set_model_mode(mode)
-    hook_manager.set_model_mode(mode)
+def on_settings_changed(config_data, hook_manager):
+    """Handle settings changes from the UI."""
+    set_debug_mode(config_data.get('debug_mode', False))
+    hook_manager.apply_config(config_data)
 
 
 def main():
     """Application entry point."""
-    # Prevent multiple instances using a named Windows Mutex
-    # We prefix with 'Local\' to ensure it's session-specific.
+    # Prevent multiple instances using a named Windows Mutex (session-specific)
     mutex_name = "Local\\SwitchLang_Mutex_v1"
     ERROR_ALREADY_EXISTS = 183
-    
-    # We must keep a reference to this handle for the duration of the app
+
     global _mutex_handle
     _mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_name)
     last_error = ctypes.windll.kernel32.GetLastError()
-    
+
     if last_error == ERROR_ALREADY_EXISTS:
         print("SwitchLang is already running.")
         sys.exit(0)
 
     # Set AppUserModelID so Windows taskbar groups windows by this ID instead of python.exe
     try:
-        myappid = u'Bumblebee621.SwitchLang.v1' 
+        myappid = 'Bumblebee621.SwitchLang.v1'
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
     except Exception:
         pass
-
-    check_data_files()
 
     config = load_config()
 
@@ -206,7 +123,13 @@ def main():
     debug = config.get('debug_mode', False)
     set_debug_mode(debug)
 
-    models = load_models(DATA_DIR, load_so=True)
+    try:
+        models = load_models(DATA_DIR, load_so=True)
+    except FileNotFoundError as e:
+        sys.exit(
+            f"Error: Model files not found in {DATA_DIR} ({e}).\n"
+            "Please run 'python scripts/build_quadgrams.py' to generate them."
+        )
 
     engine = EvaluationEngine(
         models['en'], models['he'], COLLISIONS_PATH,
@@ -228,9 +151,9 @@ def main():
     app.setQuitOnLastWindowClosed(False)
 
     QDir.addSearchPath('ui', os.path.join(BUNDLE_DIR, 'ui'))
-    stylesheet = load_stylesheet()
-    if stylesheet:
-        app.setStyleSheet(stylesheet)
+    if os.path.exists(STYLE_PATH):
+        with open(STYLE_PATH, 'r', encoding='utf-8') as f:
+            app.setStyleSheet(f.read())
 
     icon_path = os.path.join(DATA_DIR, 'icon.png')
     settings_window = SettingsWindow(CONFIG_PATH, blacklist, icon_path, version=__version__)
@@ -239,7 +162,7 @@ def main():
     tray.show()
 
     settings_window.settings_changed.connect(
-        lambda data: on_settings_changed(data, hook_manager, sensitivity, engine)
+        lambda data: on_settings_changed(data, hook_manager)
     )
     settings_window.settings_changed.connect(
         tray.update_from_settings
@@ -257,11 +180,10 @@ def main():
 
     signal.signal(signal.SIGINT, handle_sigint)
 
-    # A QTimer is needed to allow Python to process signals (like SIGINT) 
-    # because the Qt event loop normally blocks Python's signal handling.
+    # A QTimer allows Python to process signals (like SIGINT) while Qt event loop runs
     timer = QTimer()
     timer.start(500)
-    timer.timeout.connect(lambda: None)  # Let the interpreter run
+    timer.timeout.connect(lambda: None)
 
     print('SwitchLang is running in the system tray.')
     print('Right-click the tray icon for options.')

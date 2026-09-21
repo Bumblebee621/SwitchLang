@@ -18,7 +18,11 @@ SwitchLang relies on several open-source libraries and data sources. We are grat
 
 ## Data Sources
 
-### [OPUS OpenSubtitles](http://www.opensubtitles.org/)
-- **Attribution:** The character-level quadgram language models used in SwitchLang were trained using data from the OPUS project, specifically the OpenSubtitles corpus.
-- **Link:** [http://www.opensubtitles.org/](http://www.opensubtitles.org/)
-- **Acknowledgment:** We thank the creators of OpenSubtitles for providing this valuable conversational dataset.
+### [CulturaX](https://huggingface.co/datasets/uonlp/CulturaX)
+- **Attribution:** Cleaned, multilingual web-crawled dataset used for training language quadgrams.
+- **Link:** [https://huggingface.co/datasets/uonlp/CulturaX](https://huggingface.co/datasets/uonlp/CulturaX)
+
+### [Stack Exchange / Stack Overflow](https://archive.org/details/stackexchange)
+- **Attribution:** Stack Overflow public data dump used for technical domain quadgram modeling.
+- **License:** CC BY-SA 4.0
+- **Link:** [https://archive.org/details/stackexchange](https://archive.org/details/stackexchange)
