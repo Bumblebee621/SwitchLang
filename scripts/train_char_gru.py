@@ -15,6 +15,7 @@ import sys
 import time
 from collections import Counter
 
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -31,7 +32,7 @@ HE_CHARS = list(" אבגדהוזחטיכלמנסעפצקרשתךםןףץ01234567
 class CharGRU(nn.Module):
     """Compact 1-layer character GRU language model with dropout regularization."""
 
-    def __init__(self, vocab_size, emb_dim=32, hidden_dim=48, dropout=0.1):
+    def __init__(self, vocab_size, emb_dim=32, hidden_dim=96, dropout=0.05):
         super().__init__()
         self.vocab_size = vocab_size
         self.emb_dim = emb_dim
@@ -124,7 +125,8 @@ def load_words_from_corpus(corpus_path, max_words=500_000, allowed_chars=None):
     return words
 
 
-def train_model(words, lang='en', emb_dim=32, hidden_dim=48, epochs=4, batch_size=512, lr=0.003):
+def train_model(words, lang='en', emb_dim=32, hidden_dim=128, epochs=5, batch_size=512, lr=0.008,
+                dropout=0.1, weight_decay=1e-4, val_words=None, device=None):
     """Train the CharGRU model and return (model, vocab_info)."""
     raw_chars = EN_CHARS if lang == 'en' else HE_CHARS
     
@@ -134,23 +136,33 @@ def train_model(words, lang='en', emb_dim=32, hidden_dim=48, epochs=4, batch_siz
     idx_to_char = {i: ch for i, ch in enumerate(char_list)}
     vocab_size = len(char_list)
 
-    logger.info("Training %s CharGRU (vocab_size=%d, emb=%d, hidden=%d) on %d words ...",
-                lang, vocab_size, emb_dim, hidden_dim, len(words))
+    logger.info("Training %s CharGRU (vocab_size=%d, emb=%d, hidden=%d, drop=%.2f, lr=%.4f) on %d words ...",
+                lang, vocab_size, emb_dim, hidden_dim, dropout, lr, len(words))
 
     dataset = WordDataset(words, char_to_idx)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=pad_collate)
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = CharGRU(vocab_size, emb_dim, hidden_dim, dropout=0.1).to(device)
+    val_loader = None
+    if val_words:
+        val_dataset = WordDataset(val_words, char_to_idx)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=pad_collate)
+
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = CharGRU(vocab_size, emb_dim, hidden_dim, dropout=dropout).to(device)
     criterion = nn.CrossEntropyLoss(ignore_index=0)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
     model.train()
     start_time = time.time()
+    best_val_loss = float('inf')
+    best_state = None
+    final_train_loss = 0.0
 
     for epoch in range(epochs):
         total_loss = 0.0
         total_batches = 0
+        model.train()
         for x_batch, y_batch in loader:
             x_batch = x_batch.to(device)
             y_batch = y_batch.to(device)
@@ -164,9 +176,33 @@ def train_model(words, lang='en', emb_dim=32, hidden_dim=48, epochs=4, batch_siz
             total_loss += loss.item()
             total_batches += 1
 
-        avg_loss = total_loss / max(total_batches, 1)
+        final_train_loss = total_loss / max(total_batches, 1)
+
+        val_loss = None
+        if val_loader:
+            model.eval()
+            v_loss = 0.0
+            v_batches = 0
+            with torch.no_grad():
+                for x_b, y_b in val_loader:
+                    x_b = x_b.to(device)
+                    y_b = y_b.to(device)
+                    logits, _ = model(x_b)
+                    l = criterion(logits.view(-1, vocab_size), y_b.view(-1))
+                    v_loss += l.item()
+                    v_batches += 1
+            val_loss = v_loss / max(v_batches, 1)
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+
         elapsed = time.time() - start_time
-        logger.info("[%s Epoch %d/%d] Loss: %.4f (Elapsed: %.1fs)", lang, epoch + 1, epochs, avg_loss, elapsed)
+        val_str = f" | Val: {val_loss:.4f}" if val_loss is not None else ""
+        logger.info("[%s Epoch %d/%d] Loss: %.4f%s (Elapsed: %.1fs)",
+                    lang, epoch + 1, epochs, final_train_loss, val_str, elapsed)
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
 
     model.eval()
     vocab_info = {
@@ -174,10 +210,15 @@ def train_model(words, lang='en', emb_dim=32, hidden_dim=48, epochs=4, batch_siz
         'vocab_size': vocab_size,
         'emb_dim': emb_dim,
         'hidden_dim': hidden_dim,
+        'dropout': dropout,
+        'lr': lr,
+        'weight_decay': weight_decay,
         'char_to_idx': char_to_idx,
         'idx_to_char': idx_to_char,
         'pad_idx': 0,
         'unk_idx': 1,
+        'train_loss': final_train_loss,
+        'val_loss': best_val_loss if val_loader else final_train_loss,
     }
     return model.cpu(), vocab_info
 
@@ -241,7 +282,10 @@ def main():
     parser.add_argument('--max-words', type=int, default=500_000, help="Word sample size per language")
     parser.add_argument('--epochs', type=int, default=4, help="Training epochs")
     parser.add_argument('--emb-dim', type=int, default=32, help="Character embedding dimension")
-    parser.add_argument('--hidden-dim', type=int, default=48, help="GRU hidden dimension")
+    parser.add_argument('--hidden-dim', type=int, default=96, help="GRU hidden dimension")
+    parser.add_argument('--lr', type=float, default=0.004, help="Learning rate (default: 0.004)")
+    parser.add_argument('--dropout', type=float, default=0.05, help="Dropout probability (default: 0.05)")
+    parser.add_argument('--weight-decay', type=float, default=1e-4, help="L2 weight decay (default: 1e-4)")
     parser.add_argument('--lang', choices=['en', 'he', 'both'], default='both', help="Language to train")
     args = parser.parse_args()
 
@@ -262,7 +306,10 @@ def main():
             lang=lang,
             emb_dim=args.emb_dim,
             hidden_dim=args.hidden_dim,
-            epochs=args.epochs
+            epochs=args.epochs,
+            lr=args.lr,
+            dropout=args.dropout,
+            weight_decay=args.weight_decay,
         )
 
         output_base = os.path.join(data_dir, f"{lang}_char_gru")

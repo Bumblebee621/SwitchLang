@@ -602,7 +602,7 @@ atexit.register(shutdown_pool)
 
 
 def run_test(test, lines, lang, delta, data_dir, en_model_path=None,
-             he_model_path=None, mode='standard', jobs=1,
+             he_model_path=None, mode='standard', jobs=11,
              req_confirmations=2, model_type='quadgram'):
     """Run the 'fp' or 'fn' test over *lines*, optionally across processes."""
     key = (data_dir, en_model_path, he_model_path, mode, req_confirmations, model_type)
@@ -1022,7 +1022,7 @@ def main():
 
             common = dict(data_dir=args.data_dir, en_model_path=args.en_model,
                           he_model_path=args.he_model, mode=args.mode, jobs=args.jobs,
-                          req_confirmations=k)
+                          req_confirmations=k, model_type=args.model_type)
             t0 = time.time()
             fp = run_test('fp', lines, args.lang, d, **common)
             fn = run_test('fn', lines, args.lang, d, **common)

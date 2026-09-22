@@ -2,7 +2,10 @@
   "lang": "en",
   "vocab_size": 46,
   "emb_dim": 32,
-  "hidden_dim": 48,
+  "hidden_dim": 96,
+  "dropout": 0.05,
+  "lr": 0.004,
+  "weight_decay": 0.0001,
   "char_to_idx": {
     "<pad>": 0,
     "<unk>": 1,
@@ -100,5 +103,7 @@
     "45": "?"
   },
   "pad_idx": 0,
-  "unk_idx": 1
+  "unk_idx": 1,
+  "train_loss": 1.7289008587873336,
+  "val_loss": 1.7289008587873336
 }
