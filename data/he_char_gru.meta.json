@@ -107,5 +107,5 @@
   "pad_idx": 0,
   "unk_idx": 1,
   "train_loss": 2.1298860351773343,
-  "val_loss": 2.1298860351773343
+  "val_loss": null
 }

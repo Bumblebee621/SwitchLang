@@ -218,7 +218,8 @@ def train_model(words, lang='en', emb_dim=32, hidden_dim=128, epochs=5, batch_si
         'pad_idx': 0,
         'unk_idx': 1,
         'train_loss': final_train_loss,
-        'val_loss': best_val_loss if val_loader else final_train_loss,
+        # None when nothing was held out: the training loss is not a validation score.
+        'val_loss': best_val_loss if val_loader else None,
     }
     return model.cpu(), vocab_info
 
@@ -287,6 +288,8 @@ def main():
     parser.add_argument('--dropout', type=float, default=0.05, help="Dropout probability (default: 0.05)")
     parser.add_argument('--weight-decay', type=float, default=1e-4, help="L2 weight decay (default: 1e-4)")
     parser.add_argument('--lang', choices=['en', 'he', 'both'], default='both', help="Language to train")
+    parser.add_argument('--val-frac', type=float, default=0.05,
+                        help="Fraction of words held out (from the end of the corpus) for validation; 0 disables (default: 0.05)")
     args = parser.parse_args()
 
     data_dir = os.path.abspath(args.data_dir)
@@ -301,8 +304,11 @@ def main():
 
         raw_chars = EN_CHARS if lang == 'en' else HE_CHARS
         words = load_words_from_corpus(corpus_path, max_words=args.max_words, allowed_chars=raw_chars)
+        # Hold out the corpus tail rather than a shuffled sample, so words from one line don't straddle the split.
+        n_val = int(len(words) * args.val_frac)
+        train_words, val_words = (words[:-n_val], words[-n_val:]) if n_val else (words, None)
         model, vocab_info = train_model(
-            words,
+            train_words,
             lang=lang,
             emb_dim=args.emb_dim,
             hidden_dim=args.hidden_dim,
@@ -310,6 +316,7 @@ def main():
             lr=args.lr,
             dropout=args.dropout,
             weight_decay=args.weight_decay,
+            val_words=val_words,
         )
 
         output_base = os.path.join(data_dir, f"{lang}_char_gru")
