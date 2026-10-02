@@ -24,6 +24,14 @@ from torch.utils.data import Dataset, DataLoader
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s]: %(message)s')
 logger = logging.getLogger(__name__)
 
+if torch.version.hip:
+    # ROCm on RDNA2 (e.g. RX 6700 XT, gfx1031): not officially supported; reuse gfx1030
+    # kernels, else the first GPU call segfaults. Read lazily by HIP, so this works
+    # as long as nothing has touched the GPU yet.
+    os.environ.setdefault('HSA_OVERRIDE_GFX_VERSION', '10.3.0')
+    # MIOpen's fused GRU backward fails there (miopenStatusUnknownError); native kernels work.
+    torch.backends.cudnn.enabled = False
+
 # Character vocabularies
 EN_CHARS = list(" abcdefghijklmnopqrstuvwxyz0123456789-.,'\"!?")
 HE_CHARS = list(" אבגדהוזחטיכלמנסעפצקרשתךםןףץ0123456789-.,'\"!?")
