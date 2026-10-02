@@ -239,6 +239,24 @@ class EvaluationHarness:
         else:
             return other_text, word          # wrong layout
 
+    @staticmethod
+    def _neural_start(model, prefix):
+        """State (score, next-char log-probs, hidden) after reading ' ' + prefix."""
+        log_probs, h = model.step(' ', model.init_state())
+        state = (0.0, log_probs, h)
+        for ch in prefix:
+            state = EvaluationHarness._neural_advance(model, state, ch)
+        return state
+
+    @staticmethod
+    def _neural_advance(model, state, ch):
+        """Append *ch*: add log P(ch | text so far), then step the GRU over it."""
+        total, log_probs, h = state
+        ch = ch.lower()
+        total += float(log_probs[model.char_to_idx.get(ch, model.unk_idx)])
+        log_probs, h = model.step(ch, h)
+        return total, log_probs, h
+
     def _prior(self, history):
         """Evidence carried into the next word: the last entry's, 0 after a clear."""
         return history[-1].evidence if (self.accumulate and history) else 0.0
@@ -250,57 +268,55 @@ class EvaluationHarness:
         target_layout = 'he' if current_layout == 'en' else 'en'
         consecutive_hits = 0
         if self.model_type == 'neural':
+            if current_layout == 'en':
+                model_a, model_s = self.engine.en_model, self.engine.he_model
+            else:
+                model_a, model_s = self.engine.he_model, self.engine.en_model
+            # Incremental equivalent of model.score(' ' + prefix): one GRU step per
+            # keystroke instead of re-running the whole prefix (same floats, same order).
+            state_a = self._neural_start(model_a, buf_active[:2])
+            state_s = self._neural_start(model_s, buf_shadow[:2])
             consecutive_hits = 0
             for i in range(2, len(buf_active)):
                 partial_a = buf_active[:i + 1]
                 partial_s = buf_shadow[:i + 1]
 
-                eval_a = ' ' + partial_a
-                eval_s = ' ' + partial_s
-
-                if current_layout == 'en':
-                    score_a = self.engine.en_model.score(eval_a)
-                    score_s = self.engine.he_model.score(eval_s)
-                else:
-                    score_a = self.engine.he_model.score(eval_a)
-                    score_s = self.engine.en_model.score(eval_s)
+                state_a = self._neural_advance(model_a, state_a, buf_active[i])
+                state_s = self._neural_advance(model_s, state_s, buf_shadow[i])
+                score_a, score_s = state_a[0], state_s[0]
 
                 diff = score_s - score_a
                 coll = self.engine.check_collision(partial_a, partial_s)
-                should = (diff > sensitivity.delta) if not coll else False
-                amb = (not should and diff > 0 and not coll)
+                should = (diff + evidence > sensitivity.delta) if not coll else False
+                amb = (not should and diff + evidence > 0 and not coll)
 
                 if should:
                     consecutive_hits += 1
                     # Adaptive K: decisive score (> delta + 2.5) switches at K=1 (character 3!)
-                    effective_k = 1 if (diff > sensitivity.delta + 2.5) else self.req_confirmations
+                    effective_k = 1 if (diff + evidence > sensitivity.delta + 2.5) else self.req_confirmations
                     if consecutive_hits >= effective_k:
                         return WordResult(
                             word=word, buffer_active=buf_active, buffer_shadow=buf_shadow,
                             switched=True, switch_char_idx=i,
                             score_diff=diff, is_colliding=coll, is_ambiguous=amb,
+                            score_active=score_a, score_shadow=score_s,
                         )
                 else:
                     consecutive_hits = 0
 
             # Delimiter evaluation
-            eval_a = ' ' + buf_active + ' '
-            eval_s = ' ' + buf_shadow + ' '
-            if current_layout == 'en':
-                score_a_del = self.engine.en_model.score(eval_a)
-                score_s_del = self.engine.he_model.score(eval_s)
-            else:
-                score_a_del = self.engine.he_model.score(eval_a)
-                score_s_del = self.engine.en_model.score(eval_s)
+            score_a_del = state_a[0] + float(state_a[1][model_a.char_to_idx[' ']])
+            score_s_del = state_s[0] + float(state_s[1][model_s.char_to_idx[' ']])
 
             diff = score_s_del - score_a_del
             coll = self.engine.check_collision(buf_active, buf_shadow)
-            should = (diff > sensitivity.delta) if not coll else False
-            amb = (not should and diff > 0 and not coll)
+            should = (diff + evidence > sensitivity.delta) if not coll else False
+            amb = (not should and diff + evidence > 0 and not coll)
             return WordResult(
                 word=word, buffer_active=buf_active, buffer_shadow=buf_shadow,
                 switched=should, switch_char_idx=-1,
                 score_diff=diff, is_colliding=coll, is_ambiguous=amb,
+                score_active=score_a_del, score_shadow=score_s_del,
             )
 
         act_state = None

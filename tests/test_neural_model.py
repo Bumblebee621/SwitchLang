@@ -93,6 +93,17 @@ class TestCharNeuralModel(unittest.TestCase):
         # Average scoring time for an 8-character word must be well below 1,000 microseconds (1ms)
         self.assertLess(elapsed_us, 500.0, f"Scoring too slow: {elapsed_us:.1f} us")
 
+    def test_benchmark_incremental_score_matches_score(self):
+        """The benchmark's per-keystroke scoring must equal score(' ' + prefix) exactly."""
+        from evaluation.benchmark import EvaluationHarness as H
+        for model, word in ((self.en_model, 'Hello-World'), (self.he_model, 'שלום'), (self.en_model, 'a')):
+            state = H._neural_start(model, '')
+            for i, ch in enumerate(word):
+                state = H._neural_advance(model, state, ch)
+                self.assertEqual(state[0], model.score(' ' + word[:i + 1]))
+            delim = state[0] + float(state[1][model.char_to_idx[' ']])
+            self.assertEqual(delim, model.score(' ' + word + ' '))
+
 
 if __name__ == '__main__':
     unittest.main()

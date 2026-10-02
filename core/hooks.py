@@ -585,7 +585,7 @@ class HookManager:
             if should_switch:
                 self._consecutive_midword_hits += 1
                 is_neural = getattr(self.engine, 'model_type', 'quadgram') == 'neural'
-                effective_k = 1 if (is_neural and diff > self.sensitivity.delta + 2.5) else 2
+                effective_k = 1 if (is_neural and diff + self._evidence() > self.sensitivity.delta + 2.5) else 2
                 if self._consecutive_midword_hits >= effective_k:
                     is_caps_fix = (current == 'he' and caps_lock)
                     if self._trigger_switch(caps_fix=is_caps_fix):
