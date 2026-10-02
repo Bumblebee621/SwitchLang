@@ -2,6 +2,7 @@ import codecs
 import html
 import os
 import re
+import sys
 import urllib.request
 
 def build_clean_corpus_robust(url, output_txt_path, sample_rate=100, target_size_mb=60, max_lines=2000000):
@@ -117,8 +118,14 @@ if __name__ == "__main__":
     # Path relative to scripts folder
     OUTPUT_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "stack_overflow_comments.txt")
     
+    # A re-download is a different corpus, so every earlier measurement stops being comparable.
+    if os.path.exists(OUTPUT_FILE) and '--force' not in sys.argv:
+        sys.exit(f"{OUTPUT_FILE} exists — pass --force to replace it.")
+
     # Create data directory if it doesn't exist
     os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
-    
-    # Using sample_rate=10 to reach 60MB before the Archive.org stream error at row ~11M
-    build_clean_corpus_robust(SO_COMMENTS_URL, OUTPUT_FILE, sample_rate=10, target_size_mb=60, max_lines=2000000)
+
+    # Using sample_rate=10 to reach 60MB before the Archive.org stream error at row ~11M.
+    # Written to .tmp and renamed only on success, so a dropped stream can't leave a truncated corpus.
+    build_clean_corpus_robust(SO_COMMENTS_URL, OUTPUT_FILE + '.tmp', sample_rate=10, target_size_mb=60, max_lines=2000000)
+    os.replace(OUTPUT_FILE + '.tmp', OUTPUT_FILE)

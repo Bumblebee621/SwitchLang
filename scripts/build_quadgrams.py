@@ -12,9 +12,6 @@ from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import logging
 
-# Ensure we can import download_corpora if needed
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s]: %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -227,9 +224,9 @@ def main():
     Main entry point for the quadgram building script.
     
     The built models ship with the repository, so this is a no-op unless they
-    are missing or --force is given. When a build is needed, the corpora are
-    downloaded first if absent, then processed in parallel for both English
-    and Hebrew and saved directly to .marisa.
+    are missing or --force is given. When a build is needed, both corpora
+    must already be present; they are processed in parallel for English and
+    Hebrew and saved directly to .marisa.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -259,10 +256,12 @@ def main():
     en_txt_path = os.path.join(data_dir, 'en_corpus.txt')
     he_txt_path = os.path.join(data_dir, 'he_corpus.txt')
 
-    if not os.path.exists(en_txt_path) or not os.path.exists(he_txt_path):
-        logger.info("Corpora text files not found — downloading...")
-        import download_corpora  # imports `datasets`, only needed for a download
-        download_corpora.main()
+    # No auto-download: a fresh download is a different corpus, which silently
+    # invalidates every earlier measurement.  Make that an explicit step.
+    missing = [p for p in (en_txt_path, he_txt_path) if not os.path.exists(p)]
+    if missing:
+        sys.exit(f"Corpus not found: {', '.join(missing)}\n"
+                 "Download it explicitly with: python scripts/download_corpora.py")
 
     start_time = time.time()
 
