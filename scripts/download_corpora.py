@@ -99,19 +99,28 @@ def shard_files(lang):
     return sorted(random.Random(SEED).sample(files, min(SHARDS_PER_LANG, len(files))))
 
 
+def shard_docs(path):
+    """Yield {'text', 'url'} records from one CulturaX parquet file, one row group at a time."""
+    import pyarrow.parquet as pq
+    from huggingface_hub import HfFileSystem
+
+    with HfFileSystem().open(f'datasets/uonlp/CulturaX@{CULTURAX_REVISION}/{path}') as f:
+        # pre_buffer keeps every row group already read (~130 MB each in EN):
+        # six open shards reached 19 GB within minutes.
+        for batch in pq.ParquetFile(f, pre_buffer=False).iter_batches(
+                batch_size=1000, columns=['text', 'url']):
+            yield from batch.to_pylist()
+
+
 def stream_corpus(lang: str, out_txt_path: str, max_lines: int) -> None:
     """Write a sampled, site-capped corpus for *lang* to out_txt_path.
 
     Writes to a .tmp file and renames only on success, so a dropped
     connection can't leave a truncated corpus behind.
     """
-    from datasets import load_dataset  # heavy; only needed for a download
-
     shards = shard_files(lang)
     logger.info(f"[{lang.upper()}] sampling from {shards}")
-    streams = [load_dataset('parquet', split='train', streaming=True,
-                            data_files=f'hf://datasets/uonlp/CulturaX@{CULTURAX_REVISION}/{s}')
-               for s in shards]
+    streams = [shard_docs(s) for s in shards]
 
     lines_written = 0
     start_time = time.time()
@@ -171,6 +180,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    # datasets' streaming threads keep the process alive after the work is done.
-    sys.stdout.flush()
-    os._exit(0)
