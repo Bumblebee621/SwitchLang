@@ -354,8 +354,8 @@ def main():
                         help='Max lines to test per language (default: 20000).')
     parser.add_argument('--batches', type=int, default=1,
                         help='Split test lines into N disjoint batches.')
-    parser.add_argument('--baseline-delta', type=float, default=3.5,
-                        help='Delta threshold (default: 3.5).')
+    parser.add_argument('--baseline-delta', type=float, default=6.0,
+                        help='Delta threshold (default: 6.0).')
     parser.add_argument('--confirmations', type=int, default=2,
                         help='Consecutive confirmations required (default: 2).')
     parser.add_argument('--use-shipped', action='store_true',

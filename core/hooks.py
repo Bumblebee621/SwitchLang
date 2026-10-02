@@ -83,7 +83,7 @@ DELIMITER_CHARS = {VK_SPACE: ' ', VK_RETURN: '\n'}
 
 # Stores a completed word and its metadata for retroactive correction (Lookback)
 _WordEntry = collections.namedtuple(
-    '_WordEntry', ['active', 'shadow', 'delimiter', 'is_colliding', 'is_ambiguous']
+    '_WordEntry', ['active', 'shadow', 'delimiter', 'is_colliding', 'is_ambiguous', 'evidence']
 )
 
 
@@ -287,8 +287,8 @@ class HookManager:
         self.set_debug_mode(config_data.get('debug_mode', False))
         self.idle_timeout = config_data.get('idle_timeout_seconds', 15.0)
         self.sensitivity.update_config(
-            baseline_delta=config_data.get('baseline_delta', 3.5),
-            alpha=config_data.get('sensitivity_alpha', 0.3)
+            baseline_delta=config_data.get('baseline_delta', 6.0),
+            alpha=config_data.get('sensitivity_alpha', 0.1)
         )
         self.set_suspend_config(
             config_data.get('suspend_keybind_vks', []),
@@ -374,6 +374,10 @@ class HookManager:
         """
         self.history_deque.clear()
 
+    def _evidence(self):
+        """Switch evidence carried from previous words; history clears reset it to 0."""
+        return self.history_deque[-1].evidence if self.history_deque else 0.0
+
     def _build_correction_block(self):
         """Collect contiguous correctable words from the recent history.
         
@@ -412,12 +416,13 @@ class HookManager:
             self.sensitivity.delta,
             current_layout=effective_layout,
             on_delimiter=on_delimiter,
-            mode=eff_mode
+            mode=eff_mode,
+            evidence=self._evidence(),
         )
         logger.debug(
-            'EVAL: "%s" (%s/%s) -> "%s" | diff=%+.2f vs delta=%.2f | switch=%s | colliding=%s | ambiguous=%s',
+            'EVAL: "%s" (%s/%s) -> "%s" | diff=%+.2f evidence=%.2f vs delta=%.2f | switch=%s | colliding=%s | ambiguous=%s',
             self.buffer_active, self._cached_layout, effective_layout, self.buffer_shadow, diff,
-            self.sensitivity.delta, should_switch, is_colliding, is_ambiguous
+            self._evidence(), self.sensitivity.delta, should_switch, is_colliding, is_ambiguous
         )
         return should_switch, diff, is_colliding, is_ambiguous
 
@@ -532,6 +537,7 @@ class HookManager:
                     delimiter=delimiter_char,
                     is_colliding=is_colliding,
                     is_ambiguous=is_ambiguous,
+                    evidence=self.engine.accumulate(self._evidence(), diff, is_colliding),
                 ))
 
                 self.sensitivity.on_word_complete()

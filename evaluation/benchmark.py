@@ -46,7 +46,7 @@ from core.keymap import shadow
 
 # Re-use the same namedtuple that hooks.py uses for lookback history
 _WordEntry = collections.namedtuple(
-    '_WordEntry', ['active', 'shadow', 'delimiter', 'is_colliding', 'is_ambiguous']
+    '_WordEntry', ['active', 'shadow', 'delimiter', 'is_colliding', 'is_ambiguous', 'evidence']
 )
 
 
@@ -65,6 +65,8 @@ class WordResult:
     score_diff: float = 0.0
     is_colliding: bool = False
     is_ambiguous: bool = False
+    score_active: float = 0.0   # log-prob of the current word on the active layout
+    score_shadow: float = 0.0   # ... and on the other layout, at the decision point
 
 
 @dataclass
@@ -102,6 +104,23 @@ class FNReport:
         return (self.words_not_switched / self.words_tested * 1000) if self.words_tested else 0.0
 
 
+@dataclass
+class MixedReport:
+    """'Forgot to switch' results: correct prefix words, then wrong-layout words."""
+    lang: str
+    cases: int = 0
+    prefix_fp: int = 0          # cases that switched during the correct prefix (excluded below)
+    suffix_words: int = 0
+    uncorrected: int = 0        # suffix words left on the wrong layout
+    over_corrected: int = 0     # prefix words the correction block wrongly flipped
+    latency_values: list = field(default_factory=list)
+    elapsed_sec: float = 0.0
+
+    @property
+    def fn_per_1k(self):
+        return (self.uncorrected / self.suffix_words * 1000) if self.suffix_words else 0.0
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # EVALUATION HARNESS
 # ═══════════════════════════════════════════════════════════════════════════
@@ -109,9 +128,15 @@ class FNReport:
 class EvaluationHarness:
     """Replays text through the SwitchLang engine to measure accuracy."""
 
+    accumulate = True   # carry switch evidence across words (CUSUM), as hooks.py does
+    alpha = 0.1         # sensitivity decay; 0.1 is what main.py ships
+
     def __init__(self, data_dir, en_model_path=None, he_model_path=None,
-                 mode='standard', req_confirmations=2, model_type='quadgram'):
+                 mode='standard', req_confirmations=2, model_type='quadgram',
+                 accumulate=True, alpha=0.1):
         self.model_type = model_type
+        self.accumulate = accumulate
+        self.alpha = alpha
         if model_type == 'neural':
             models = load_neural_models(data_dir)
             if en_model_path:
@@ -214,7 +239,11 @@ class EvaluationHarness:
         else:
             return other_text, word          # wrong layout
 
-    def _simulate_word(self, word, text_lang, current_layout, sensitivity):
+    def _prior(self, history):
+        """Evidence carried into the next word: the last entry's, 0 after a clear."""
+        return history[-1].evidence if (self.accumulate and history) else 0.0
+
+    def _simulate_word(self, word, text_lang, current_layout, sensitivity, evidence=0.0):
         """Evaluate one word character-by-character using incremental O(1) scoring, then on delimiter."""
         buf_active, buf_shadow = self._get_buffers(word, text_lang, current_layout)
 
@@ -299,8 +328,8 @@ class EvaluationHarness:
 
             diff = score_s - score_a
             coll = self.engine.check_collision(partial_a, partial_s)
-            should = (diff > sensitivity.delta) if not coll else False
-            amb = (not should and diff > 0 and not coll)
+            should = (diff + evidence > sensitivity.delta) if not coll else False
+            amb = (not should and diff + evidence > 0 and not coll)
 
             if should:
                 consecutive_hits += 1
@@ -309,6 +338,7 @@ class EvaluationHarness:
                         word=word, buffer_active=buf_active, buffer_shadow=buf_shadow,
                         switched=True, switch_char_idx=i,
                         score_diff=diff, is_colliding=coll, is_ambiguous=amb,
+                        score_active=score_a, score_shadow=score_s,
                     )
             else:
                 consecutive_hits = 0
@@ -325,18 +355,23 @@ class EvaluationHarness:
             )
             diff = score_s_del - score_a_del
             coll = self.engine.check_collision(buf_active, buf_shadow)
-            should = (diff > sensitivity.delta) if not coll else False
-            amb = (not should and diff > 0 and not coll)
+            should = (diff + evidence > sensitivity.delta) if not coll else False
+            amb = (not should and diff + evidence > 0 and not coll)
         else:
             should, diff, coll, amb = self.engine.evaluate(
                 buf_active, buf_shadow, sensitivity.delta,
-                current_layout=current_layout, on_delimiter=True,
+                current_layout=current_layout, on_delimiter=True, evidence=evidence,
             )
+            score_a_del = score_s_del = 0.0
+            if should:  # scores only matter for reporting a switch
+                score_a_del = self._score_text_detailed(' ' + buf_active + ' ', current_layout)[0]
+                score_s_del = self._score_text_detailed(' ' + buf_shadow + ' ', target_layout)[0]
 
         return WordResult(
             word=word, buffer_active=buf_active, buffer_shadow=buf_shadow,
             switched=should, switch_char_idx=-1,
             score_diff=diff, is_colliding=coll, is_ambiguous=amb,
+            score_active=score_a_del, score_shadow=score_s_del,
         )
 
     @staticmethod
@@ -351,11 +386,23 @@ class EvaluationHarness:
         block.reverse()
         return block
 
+    @staticmethod
+    def _switch_event(words, w_idx, res, layout, delta, kind):
+        """Snapshot of a switch: where it fired, per-language word scores, and the text up to it."""
+        word = words[w_idx]
+        typed = word[:res.switch_char_idx + 1] if res.switch_char_idx >= 0 else word
+        other = 'he' if layout == 'en' else 'en'
+        scores = {layout: res.score_active, other: res.score_shadow}
+        return dict(kind=kind, word_idx=w_idx, word=word, char_idx=res.switch_char_idx,
+                    context=' '.join(words[:w_idx] + [typed]),
+                    score_en=scores['en'], score_he=scores['he'],
+                    diff=res.score_diff, delta=delta)
+
     # ------------------------------------------------------------------
     # FALSE-POSITIVE TEST
     # ------------------------------------------------------------------
 
-    def test_false_positives(self, lines, text_lang, baseline_delta=3.5,
+    def test_false_positives(self, lines, text_lang, baseline_delta=6.0,
                              line_offset=0, progress=True):
         """Feed *valid* text on the *correct* layout.  Any switch = FP."""
         report = FPReport(lang=text_lang)
@@ -369,35 +416,29 @@ class EvaluationHarness:
             report.lines_tested += 1
 
             current = correct
-            sensitivity = SensitivityManager(baseline_delta=baseline_delta)
+            sensitivity = SensitivityManager(baseline_delta=baseline_delta, alpha=self.alpha)
             history = collections.deque(maxlen=50)
             line_fps = 0
-            details = []
+            events = []
 
             for w_idx, word in enumerate(words):
                 if not word:
                     continue
                 report.words_tested += 1
-                res = self._simulate_word(word, text_lang, current, sensitivity)
+                res = self._simulate_word(word, text_lang, current, sensitivity, self._prior(history))
 
                 if res.switched:
                     if current == correct:
                         # Switching AWAY from correct layout -> false positive
                         line_fps += 1
                         report.fp_count += 1
-                        block = self._build_correction_block(history)
-                        details.append(
-                            f'  FP word {w_idx+1} "{word}" '
-                            f'(diff={res.score_diff:+.2f} delta={sensitivity.delta:.2f} '
-                            f'lookback={len(block)})'
-                        )
+                        kind = 'first_fp' if line_fps == 1 else 'later_fp'
                     else:
                         # Switching BACK to correct layout -> recovery (not punished)
                         report.recovery_count += 1
-                        block = self._build_correction_block(history)
-                        details.append(
-                            f'  Recovery word {w_idx+1} "{word}" (lookback={len(block)})'
-                        )
+                        kind = 'recovery'
+                    events.append(self._switch_event(
+                        words, w_idx, res, current, sensitivity.delta, kind))
 
                     current = self._other(current)
                     history.clear()
@@ -407,15 +448,18 @@ class EvaluationHarness:
                     history.append(_WordEntry(
                         active=buf_a, shadow=buf_s, delimiter=' ',
                         is_colliding=res.is_colliding, is_ambiguous=res.is_ambiguous,
+                        evidence=EvaluationEngine.accumulate(
+                            self._prior(history), res.score_diff, res.is_colliding),
                     ))
                     sensitivity.on_word_complete()
 
             if line_fps > 0:
                 report.lines_with_fp += 1
-                trunc = line.strip()[:100]
-                report.flagged_lines.append(
-                    f'Line {line_num}: "{trunc}"\n' + '\n'.join(details)
-                )
+                report.flagged_lines.append(dict(
+                    line_num=line_num, n_fp=line_fps, events=events,
+                    # severity: how far past the threshold the first FP was
+                    margin=events[0]['diff'] - events[0]['delta'],
+                ))
 
             if progress and line_num % 5000 == 0:
                 print(f'  [FP] {line_num}/{len(lines)} lines …', flush=True)
@@ -427,7 +471,7 @@ class EvaluationHarness:
     # FALSE-NEGATIVE TEST
     # ------------------------------------------------------------------
 
-    def test_false_negatives(self, lines, text_lang, baseline_delta=3.5,
+    def test_false_negatives(self, lines, text_lang, baseline_delta=6.0,
                              line_offset=0, progress=True):
         """Feed *inverted* text (wrong layout).  Failure to switch = FN.
 
@@ -447,11 +491,14 @@ class EvaluationHarness:
             report.lines_tested += 1
 
             current = wrong                # start on WRONG layout
-            sensitivity = SensitivityManager(baseline_delta=baseline_delta)
+            wrong_since = 0                # first word of the current wrong-layout stretch
+            sensitivity = SensitivityManager(baseline_delta=baseline_delta, alpha=self.alpha)
             history = collections.deque(maxlen=50)
 
             latency_chars = 0
             first_switch_word = None
+            switch_event = None
+            best_diff = None            # closest the wrong-layout words came to switching
             line_words_not_switched = 0
             line_switched = False
 
@@ -460,13 +507,18 @@ class EvaluationHarness:
                     continue
                 report.words_tested += 1
 
-                res = self._simulate_word(word, text_lang, current, sensitivity)
+                res = self._simulate_word(word, text_lang, current, sensitivity, self._prior(history))
+
+                if current != correct and (best_diff is None or res.score_diff > best_diff):
+                    best_diff = res.score_diff
 
                 if res.switched and current != correct:
                     # ── correct switch detected ──
                     line_switched = True
                     if first_switch_word is None:
                         first_switch_word = w_idx
+                        switch_event = self._switch_event(
+                            words, w_idx, res, current, sensitivity.delta, 'switch')
 
                     # Latency: chars typed so far in wrong layout
                     if res.switch_char_idx >= 0:
@@ -479,7 +531,7 @@ class EvaluationHarness:
                     # Determine uncorrected words
                     block = self._build_correction_block(history)
                     corrected = len(block) + 1          # block + trigger word
-                    total_wrong = w_idx + 1             # all words so far
+                    total_wrong = w_idx + 1 - wrong_since  # words in this wrong-layout stretch
                     uncorrected = max(0, total_wrong - corrected)
                     line_words_not_switched += uncorrected
 
@@ -490,6 +542,7 @@ class EvaluationHarness:
                     # switched while already on correct layout (FP within FN test)
                     # — just track the layout flip
                     current = self._other(current)
+                    wrong_since = w_idx + 1
                     history.clear()
                     sensitivity.reset(reason='layout_switch')
                 else:
@@ -501,6 +554,8 @@ class EvaluationHarness:
                     history.append(_WordEntry(
                         active=buf_a, shadow=buf_s, delimiter=' ',
                         is_colliding=res.is_colliding, is_ambiguous=res.is_ambiguous,
+                        evidence=EvaluationEngine.accumulate(
+                            self._prior(history), res.score_diff, res.is_colliding),
                     ))
                     sensitivity.on_word_complete()
 
@@ -518,22 +573,74 @@ class EvaluationHarness:
 
             # Flag lines with issues
             if not line_switched or line_words_not_switched > 0:
-                trunc = line.strip()[:100]
-                if first_switch_word is not None:
-                    report.flagged_lines.append(
-                        f'Line {line_num}: "{trunc}" -> switch at word '
-                        f'{first_switch_word+1} ("{words[first_switch_word]}"), '
-                        f'latency={latency_chars} chars, '
-                        f'{line_words_not_switched} uncorrected'
-                    )
-                else:
-                    report.flagged_lines.append(
-                        f'Line {line_num}: "{trunc}" -> NO SWITCH '
-                        f'({latency_chars} chars lost)'
-                    )
+                report.flagged_lines.append(dict(
+                    line_num=line_num, text=line.strip(), n_words=len(words),
+                    uncorrected=line_words_not_switched, latency=latency_chars,
+                    switch=switch_event, best_diff=best_diff, delta=baseline_delta,
+                ))
 
             if progress and line_num % 5000 == 0:
                 print(f'  [FN] {line_num}/{len(lines)} lines …', flush=True)
+
+        report.elapsed_sec = time.time() - t0
+        return report
+
+    # ------------------------------------------------------------------
+    # MIXED ("FORGOT TO SWITCH") TEST
+    # ------------------------------------------------------------------
+
+    def test_mixed(self, pairs, text_lang, baseline_delta=6.0, n_prefix=3,
+                   line_offset=0, progress=True):
+        """Each case: *n_prefix* words of the other language typed correctly, then
+        a *text_lang* line typed on that same (now wrong) layout.
+
+        Latency counts wrong-layout chars from the start of the suffix.
+        """
+        report = MixedReport(lang=text_lang)
+        t0 = time.time()
+        other = self._other(text_lang)
+
+        for line, prefix_line in pairs:
+            prefix = prefix_line.split()[:n_prefix]
+            suffix = line.split()
+            if len(prefix) < n_prefix or not suffix:
+                continue
+            report.cases += 1
+
+            seq = [(w, other) for w in prefix] + [(w, text_lang) for w in suffix]
+            sensitivity = SensitivityManager(baseline_delta=baseline_delta, alpha=self.alpha)
+            history = collections.deque(maxlen=50)
+            latency = 0
+
+            for i, (word, lang) in enumerate(seq):
+                res = self._simulate_word(word, lang, other, sensitivity, self._prior(history))
+                if res.switched:
+                    if i < n_prefix:
+                        report.prefix_fp += 1
+                    else:
+                        # Correction block is the history tail: words first..i-1.
+                        first = i - len(self._build_correction_block(history))
+                        report.over_corrected += max(0, n_prefix - first)
+                        report.uncorrected += max(0, first - n_prefix)
+                        latency += (res.switch_char_idx + 1 if res.switch_char_idx >= 0
+                                    else len(word) + 1)
+                    break
+                if i >= n_prefix:
+                    latency += len(word) + 1
+                buf_a, buf_s = self._get_buffers(word, lang, other)
+                history.append(_WordEntry(
+                    active=buf_a, shadow=buf_s, delimiter=' ',
+                    is_colliding=res.is_colliding, is_ambiguous=res.is_ambiguous,
+                    evidence=EvaluationEngine.accumulate(
+                        self._prior(history), res.score_diff, res.is_colliding),
+                ))
+                sensitivity.on_word_complete()
+            else:
+                report.uncorrected += len(suffix)   # never switched
+
+            if not (res.switched and i < n_prefix):
+                report.suffix_words += len(suffix)
+                report.latency_values.append(latency)
 
         report.elapsed_sec = time.time() - t0
         return report
@@ -551,15 +658,18 @@ class EvaluationHarness:
 _worker_models = (None, None)
 
 
+def _test_method(harness, test):
+    return {'fp': harness.test_false_positives, 'fn': harness.test_false_negatives,
+            'mixed': harness.test_mixed}[test]
+
+
 def _run_chunk(job):
     global _worker_models
-    test, offset, lines, lang, delta, key = job
+    test, offset, lines, lang, delta, key, kw = job
     if _worker_models[0] != key:
         _worker_models = (key, EvaluationHarness(*key))
-    harness = _worker_models[1]
-    method = (harness.test_false_positives if test == 'fp'
-              else harness.test_false_negatives)
-    return method(lines, lang, delta, line_offset=offset, progress=False)
+    return _test_method(_worker_models[1], test)(
+        lines, lang, delta, line_offset=offset, progress=False, **kw)
 
 
 def _merge_reports(reports):
@@ -603,20 +713,22 @@ atexit.register(shutdown_pool)
 
 def run_test(test, lines, lang, delta, data_dir, en_model_path=None,
              he_model_path=None, mode='standard', jobs=11,
-             req_confirmations=2, model_type='quadgram'):
-    """Run the 'fp' or 'fn' test over *lines*, optionally across processes."""
-    key = (data_dir, en_model_path, he_model_path, mode, req_confirmations, model_type)
+             req_confirmations=2, model_type='quadgram', accumulate=True, alpha=0.1,
+             **kw):
+    """Run the 'fp', 'fn' or 'mixed' test over *lines*, optionally across processes.
+
+    For 'mixed', *lines* are (line, prefix_line) pairs and *kw* carries n_prefix.
+    """
+    key = (data_dir, en_model_path, he_model_path, mode, req_confirmations, model_type,
+           accumulate, alpha)
 
     if jobs <= 1:
-        harness = EvaluationHarness(*key)
-        method = (harness.test_false_positives if test == 'fp'
-                  else harness.test_false_negatives)
-        return method(lines, lang, delta)
+        return _test_method(EvaluationHarness(*key), test)(lines, lang, delta, **kw)
 
     # Several chunks per worker keeps them busy when line lengths vary.
     n_chunks = jobs * 4
     size = max(1, -(-len(lines) // n_chunks))
-    chunks = [(test, i, lines[i:i + size], lang, delta, key)
+    chunks = [(test, i, lines[i:i + size], lang, delta, key, kw)
               for i in range(0, len(lines), size)]
 
     t0 = time.time()
@@ -662,7 +774,7 @@ def _pct(num, denom):
     return (num / denom * 100) if denom else 0.0
 
 
-def print_fp_report(report, corpus_path, model_path, provenance='', max_flagged=30,
+def print_fp_report(report, corpus_path, model_path, provenance='', max_flagged=25,
                     delta=None, req_confirmations=None, mode=None, jobs=None):
     print(f'\n{"=" * 65}')
     print(f' FALSE POSITIVE TEST  (valid {report.lang.upper()}, layout={report.lang})')
@@ -683,20 +795,25 @@ def print_fp_report(report, corpus_path, model_path, provenance='', max_flagged=
     fpr = _pct(report.fp_count, report.words_tested)
     print(f'False positives:  {report.fp_count}/{report.words_tested}  ({fpr:.3f}%)')
     print(f'FP per 1k words:  {report.fp_per_1k:.3f}')
+    print(f'  first in line:  {report.lines_with_fp}   later in line: {report.fp_count - report.lines_with_fp}')
     print(f'Lines with FP:    {report.lines_with_fp}/{report.lines_tested}')
     print(f'Recoveries:       {report.recovery_count}')
     print(f'Time:             {report.elapsed_sec:.1f}s')
 
     if report.flagged_lines:
-        print(f'\nFlagged lines (first {min(max_flagged, len(report.flagged_lines))}):')
-        for detail in report.flagged_lines[:max_flagged]:
-            print(f'  {detail}')
-        remaining = len(report.flagged_lines) - max_flagged
-        if remaining > 0:
-            print(f'  … and {remaining} more')
+        worst = sorted(report.flagged_lines, key=lambda r: (r['n_fp'], r['margin']), reverse=True)
+        print(f'\nWorst {min(max_flagged, len(worst))} of {len(worst)} lines with FPs '
+              f'(most FPs, then furthest past Δ; scores are log-probs of the word being typed):')
+        for rank, r in enumerate(worst[:max_flagged], 1):
+            n_rec = sum(e['kind'] == 'recovery' for e in r['events'])
+            print(f'\n #{rank:<3} line {r["line_num"]} · {r["n_fp"]} FP · {n_rec} recovery · '
+                  f'margin {r["margin"]:+.2f}')
+            for e in r['events']:
+                print(_format_event(e))
+        _print_remaining(len(worst), max_flagged)
 
 
-def print_fn_report(report, corpus_path, model_path, provenance='', max_flagged=30,
+def print_fn_report(report, corpus_path, model_path, provenance='', max_flagged=25,
                     delta=None, req_confirmations=None, mode=None, jobs=None):
     other_lang = 'he' if report.lang == 'en' else 'en'
     print(f'\n{"=" * 65}')
@@ -734,15 +851,42 @@ def print_fn_report(report, corpus_path, model_path, provenance='', max_flagged=
     print(f'Time:               {report.elapsed_sec:.1f}s')
 
     if report.flagged_lines:
-        print(f'\nFlagged lines (first {min(max_flagged, len(report.flagged_lines))}):')
-        for detail in report.flagged_lines[:max_flagged]:
-            print(f'  {detail}')
-        remaining = len(report.flagged_lines) - max_flagged
-        if remaining > 0:
-            print(f'  … and {remaining} more')
+        worst = sorted(report.flagged_lines, key=lambda r: (r['uncorrected'], r['latency']), reverse=True)
+        print(f'\nWorst {min(max_flagged, len(worst))} of {len(worst)} flagged lines '
+              f'(most uncorrected words, then latency; text shown is what the user meant to type):')
+        for rank, r in enumerate(worst[:max_flagged], 1):
+            print(f'\n #{rank:<3} line {r["line_num"]} · {r["uncorrected"]}/{r["n_words"]} words uncorrected · '
+                  f'latency {r["latency"]} chars')
+            if r['switch']:
+                print(_format_event(r['switch']))
+            else:
+                best = f'{r["best_diff"]:+.2f}' if r['best_diff'] is not None else 'n/a'
+                print(f'     NO SWITCH  best diff {best} vs Δ={r["delta"]:.2f}')
+                print(f'       {_tail(r["text"])}')
+        _print_remaining(len(worst), max_flagged)
 
 
-def explain_word(word, data_dir, baseline_delta=3.5, mode='standard', req_confirmations=2,
+def _tail(text, width=160):
+    return text if len(text) <= width else '…' + text[-width:]
+
+
+def _format_event(e):
+    """Two lines: what fired with per-language scores, then the text up to the switch."""
+    label = {'first_fp': 'FIRST FP', 'later_fp': 'LATER FP',
+             'recovery': 'recovery', 'switch': 'SWITCH'}[e['kind']]
+    where = f'mid-word @char {e["char_idx"] + 1}' if e['char_idx'] >= 0 else 'on delimiter'
+    return (f'     {label:<9} word {e["word_idx"] + 1} "{e["word"]}" ({where})  '
+            f'EN={e["score_en"]:.2f}  HE={e["score_he"]:.2f}  '
+            f'diff={e["diff"]:+.2f} > Δ={e["delta"]:.2f}\n'
+            f'       {_tail(e["context"])}')
+
+
+def _print_remaining(total, shown):
+    if total > shown:
+        print(f'\n  … and {total - shown} more')
+
+
+def explain_word(word, data_dir, baseline_delta=6.0, mode='standard', req_confirmations=2,
                  en_model_path=None, he_model_path=None):
     """Provide step-by-step diagnostic scoring for a single word."""
     models = load_models(data_dir, load_so=(mode == 'technical'))
@@ -894,8 +1038,8 @@ def main():
         help='Max non-empty lines to process (default: entire file).',
     )
     parser.add_argument(
-        '--baseline-delta', type=float, default=3.5,
-        help='Initial score delta threshold (default: 3.5).',
+        '--baseline-delta', type=float, default=6.0,
+        help='Initial score delta threshold (default: 6.0).',
     )
     parser.add_argument(
         '--test', choices=['fp', 'fn', 'both'], default='both',
@@ -932,7 +1076,17 @@ def main():
     )
     parser.add_argument(
         '--variants', default=None, metavar='VARS',
-        help='Comma-separated confirmation variants to sweep, e.g. "k1:4.0,k2:3.5" (runs FP+FN head-to-head comparison).',
+        help='Comma-separated variants to sweep as K:Δ[:α][:noacc], e.g. "k2:6:0.1,k2:3.5:0.3:noacc" '
+             '(runs FP+FN head-to-head comparison; noacc stops carrying evidence across words).',
+    )
+    parser.add_argument(
+        '--alpha', type=float, default=0.1,
+        help='Sensitivity decay alpha (default: 0.1, the shipped value).',
+    )
+    parser.add_argument(
+        '--mixed', default=None, metavar='N[,N]',
+        help='With --variants: also run the "forgot to switch" test after N correct '
+             'words of the other language, e.g. "3,6".',
     )
     parser.add_argument(
         '--explain', default=None, metavar='WORD',
@@ -1003,6 +1157,15 @@ def main():
     # ── variant comparison sweep ──
     if args.variants:
         var_specs = [v.strip() for v in args.variants.split(',') if v.strip()]
+        mixed_ns = [int(n) for n in args.mixed.split(',')] if args.mixed else []
+        if mixed_ns:
+            other = 'he' if args.lang == 'en' else 'en'
+            prefix_lines = [l for l in load_corpus_lines(
+                                os.path.join(args.data_dir, f'{other}_corpus.txt'), other,
+                                cap=len(lines) * 2)
+                            if len(l.split()) >= max(mixed_ns)]
+            pairs = [(l, prefix_lines[i % len(prefix_lines)]) for i, l in enumerate(lines)]
+            mixed_results = {n: [] for n in mixed_ns}
         print("\n" + "=" * 108)
         print(f" HEAD-TO-HEAD VARIANT COMPARISON: {args.lang.upper()} ({len(lines):,} lines, mode={args.mode}, jobs={args.jobs})")
         print(f" Variants: {', '.join(var_specs)}")
@@ -1012,20 +1175,26 @@ def main():
         baseline_fp, baseline_fn = None, None
 
         for spec in var_specs:
-            if ':' in spec:
-                k_part, d_part = spec.split(':', 1)
-                k = int(k_part.lower().lstrip('k'))
-                d = float(d_part)
+            parts = spec.lower().split(':')
+            acc = parts[-1] != 'noacc'
+            if not acc:
+                parts.pop()
+            if len(parts) == 1:
+                k, d, a = args.confirmations, float(parts[0]), args.alpha
             else:
-                k = args.confirmations
-                d = float(spec)
+                k, d = int(parts[0].lstrip('k')), float(parts[1])
+                a = float(parts[2]) if len(parts) > 2 else args.alpha
 
             common = dict(data_dir=args.data_dir, en_model_path=args.en_model,
                           he_model_path=args.he_model, mode=args.mode, jobs=args.jobs,
-                          req_confirmations=k, model_type=args.model_type)
+                          req_confirmations=k, model_type=args.model_type,
+                          accumulate=acc, alpha=a)
             t0 = time.time()
             fp = run_test('fp', lines, args.lang, d, **common)
             fn = run_test('fn', lines, args.lang, d, **common)
+            for n in mixed_ns:
+                mixed_results[n].append(
+                    (spec, run_test('mixed', pairs, args.lang, d, n_prefix=n, **common)))
             elapsed = time.time() - t0
 
             mean_l = statistics.mean(fn.latency_values) if fn.latency_values else 0.0
@@ -1043,11 +1212,22 @@ def main():
             results.append((spec, k, d, fp.words_tested, fp.fp_count, fp.fp_per_1k, d_fp_str,
                             fn.words_not_switched, fn.fn_per_1k, d_fn_str, med_l, mean_l, elapsed))
 
-        print(f"\n{'variant':<10} {'K':>3} {'Δ':>5} {'Words':>10} {'FP':>6} {'FP/1k':>8} {'ΔFP%':>8} {'FN':>6} {'FN/1k':>8} {'ΔFN%':>8} {'Med':>6} {'Mean':>7} {'Time':>6}")
+        print(f"\n{'variant':<16} {'K':>3} {'Δ':>5} {'Words':>10} {'FP':>6} {'FP/1k':>8} {'ΔFP%':>8} {'FN':>6} {'FN/1k':>8} {'ΔFN%':>8} {'Med':>6} {'Mean':>7} {'Time':>6}")
         print("-" * 108)
         for r in results:
-            print(f"{r[0]:<10} {r[1]:>3} {r[2]:>5.1f} {r[3]:>10,} {r[4]:>6,} {r[5]:>8.3f} {r[6]:>8} {r[7]:>6,} {r[8]:>8.3f} {r[9]:>8} {r[10]:>5.1f}c {r[11]:>6.2f}c {r[12]:>5.1f}s")
+            print(f"{r[0]:<16} {r[1]:>3} {r[2]:>5.1f} {r[3]:>10,} {r[4]:>6,} {r[5]:>8.3f} {r[6]:>8} {r[7]:>6,} {r[8]:>8.3f} {r[9]:>8} {r[10]:>5.1f}c {r[11]:>6.2f}c {r[12]:>5.1f}s")
         print("-" * 108)
+
+        for n in mixed_ns:
+            print(f"\nFORGOT-TO-SWITCH after {n} correct words ({other.upper()} prefix, {args.lang.upper()} suffix)")
+            print(f"{'variant':<16} {'Cases':>7} {'PrefixFP':>9} {'SuffixW':>9} {'Uncorr':>7} {'FN/1k':>8} {'OverCorr':>9} {'Med':>6} {'Mean':>7}")
+            print("-" * 86)
+            for spec, m in mixed_results[n]:
+                med = statistics.median(m.latency_values) if m.latency_values else 0.0
+                mean = statistics.mean(m.latency_values) if m.latency_values else 0.0
+                print(f"{spec:<16} {m.cases:>7,} {m.prefix_fp:>9,} {m.suffix_words:>9,} {m.uncorrected:>7,} "
+                      f"{m.fn_per_1k:>8.3f} {m.over_corrected:>9,} {med:>5.1f}c {mean:>6.2f}c")
+            print("-" * 86)
         return
 
     # ── run tests ──
@@ -1062,7 +1242,8 @@ def main():
 
     common = dict(data_dir=args.data_dir, en_model_path=args.en_model,
                   he_model_path=args.he_model, mode=args.mode, jobs=args.jobs,
-                  req_confirmations=args.confirmations, model_type=args.model_type)
+                  req_confirmations=args.confirmations, model_type=args.model_type,
+                  alpha=args.alpha)
 
     report_kwargs = dict(delta=args.baseline_delta, req_confirmations=args.confirmations,
                           mode=args.mode, jobs=args.jobs)

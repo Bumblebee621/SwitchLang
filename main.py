@@ -159,8 +159,8 @@ def main():
         )
 
     sensitivity = SensitivityManager(
-        baseline_delta=config.get('baseline_delta', 3.5),
-        alpha=config.get('sensitivity_alpha', 0.3)
+        baseline_delta=config.get('baseline_delta', 6.0),
+        alpha=config.get('sensitivity_alpha', 0.1)
     )
 
     blacklist = BlacklistManager(CONFIG_PATH)
