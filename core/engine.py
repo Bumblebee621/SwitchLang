@@ -174,8 +174,17 @@ class EvaluationEngine:
             return max(score_std, score_so)
         return score_std
 
+    @staticmethod
+    def accumulate(prev, diff, is_colliding):
+        """CUSUM update of switch evidence carried across words.
+
+        Clamped at 0 so correct words can't bury a later mistake;
+        collisions are valid in both layouts, so they carry no evidence.
+        """
+        return prev if is_colliding else max(0.0, prev + diff)
+
     def evaluate(self, s_active, s_shadow, delta,
-                 current_layout='en', on_delimiter=False, mode=None):
+                 current_layout='en', on_delimiter=False, mode=None, evidence=0.0):
         """Run the full evaluation pipeline.
 
         Args:
@@ -186,6 +195,7 @@ class EvaluationEngine:
             on_delimiter: Whether this evaluation is triggered by a
                           word delimiter (space, enter, etc.).
             mode: Optional mode override ('standard' or 'technical').
+            evidence: Switch evidence carried from previous words (see accumulate()).
 
         Returns:
             Tuple (should_switch: bool, score_diff: float, is_colliding: bool, is_ambiguous: bool).
@@ -223,10 +233,11 @@ class EvaluationEngine:
         if is_colliding:
             should_switch = False
         else:
-            should_switch = score_diff > delta
-            # Mark as ambiguous if it leans towards the target language 
-            # (score_diff > 0) but hasn't crossed the current dynamic delta threshold.
-            if not should_switch and score_diff > 0:
+            total = score_diff + evidence
+            should_switch = total > delta
+            # Mark as ambiguous if it leans towards the target language
+            # (total > 0) but hasn't crossed the current dynamic delta threshold.
+            if not should_switch and total > 0:
                 is_ambiguous = True
 
         self._log_decision(s_active, s_shadow, current_layout, on_delimiter, is_colliding, is_ambiguous, score_diff, delta, should_switch)

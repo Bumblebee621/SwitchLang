@@ -198,7 +198,7 @@ def main():
     parser.add_argument('--max-test-lines', type=int, default=75_000,
                         help='Cap lines scored per fold (default: 75000).  Training '
                              'still uses every line outside the fold.')
-    parser.add_argument('--baseline-delta', type=float, default=3.5)
+    parser.add_argument('--baseline-delta', type=float, default=6.0)
     parser.add_argument('--confirmations', type=int, default=2,
                         help='Number of consecutive confirmations required for switch (default: 2).')
     parser.add_argument('--data-dir', default=default_data,
