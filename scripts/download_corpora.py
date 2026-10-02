@@ -40,9 +40,10 @@ CULTURAX_REVISION = '6a8734bc69fefcbb7735f4f9250f43e4cd7a442e'
 SEED = 2026
 # HE has exactly 6 shards (all taken); EN has 3,072, so this samples 6 of them.
 SHARDS_PER_LANG = 6
-# Low enough that 5M lines need ~70% of the chosen shards, so the sample
-# spreads across each file instead of reading its start.
-DOC_KEEP_PROB = 0.08
+# Low enough that 5M lines need most of the chosen shards, so the sample
+# spreads across each file instead of reading its start.  At 0.08 all six
+# HE shards ran out at 4.62M unique lines.
+DOC_KEEP_PROB = 0.12
 # 0.5% of a 5M-line corpus; stops a few big sites setting the corpus's register.
 SITE_CAP = 25_000
 
