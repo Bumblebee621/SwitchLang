@@ -76,9 +76,15 @@ The rule, set before the runs: a candidate beats v1 only if both of these hold:
 
 At 5–11M words per test, a ±2% difference is within noise. The v2 FN regressions are far outside it.
 
-## Interpretation (hypothesis, not verified)
+## Interpretation (cause unknown)
 
-**v2 shifts the trade-off from false switches to missed switches.** Its models have 4–19% more distinct quadgrams, because sampling all shards with a per-site cap pulls in more varied and noisier sites. A broader model finds more letter sequences plausible. Wrong-layout gibberish then looks like real text more often, so switches are missed (FN up) while false switches fall (EN FP down).
+**v2 shifts the trade-off from false switches to missed switches** (FN up, EN FP down). Its models have 4–19% more distinct quadgrams. A broader model may find more letter sequences plausible, but that link is unmeasured.
+
+**Two explanations are ruled out:**
+- **Less training data.** v2 trained on more words than v1: EN 171M vs 162M, HE 175M vs 101M. The quadgram learning curve (`data/learning_curve_*.json`) is flat beyond about 2M words.
+- **A noisier corpus.** On a 300k-line sample, the share of model-eligible words unknown to `wordfreq` is the same for EN (0.94% v1, 0.95% v2) and lower for HE v2 (1.25% vs 1.39%). This doesn't rule out machine-translated or spun text, which uses real words.
+
+**Next step:** compare the specific missed switches (words v2 misses and v1 catches, especially EN `chat`) and the quadgrams that make them score as plausible.
 
 **v1c's Hebrew gain looks real but small.** Its English cost is within noise. If cleanup is wanted on Hebrew alone, it would need a rule exception: the plan requires symmetric changes.
 
