@@ -7,7 +7,7 @@ test sets without train/test overlap.  Kept lines reach the builder as-is,
 so a raw corpus trains exactly as it does in production.
 
 With --model gru it trains a Char-GRU the way scripts/train_char_gru.py does
-(first 200k words, 3 epochs, shipped hyperparameters, last 5% held out for
+(first 200k words, GRU_HPARAMS, last 5% held out for
 validation) once per --seed, writing PREFIX_s{seed}.npz instead.
 
 Usage:
@@ -51,15 +51,14 @@ def main():
     held_out = held_out_keys(args.exclude)
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     if args.model == 'gru':
-        from evaluation.kfold_cv import CHARS, extract_words_from_lines, shipped_hparams
+        from evaluation.kfold_cv import CHARS, extract_words_from_lines
         from scripts.train_char_gru import export_numpy_weights, train_model
         with open(args.train, encoding='utf-8', errors='replace') as f:
             kept = (line for line in f if line_key(normalize_line(line)) not in held_out)
             words = extract_words_from_lines(kept, CHARS[args.lang], max_words=200_000)
         n_val = len(words) // 20
         for seed in args.seed:
-            model, info = train_model(words[:-n_val], lang=args.lang, epochs=3, val_words=words[-n_val:],
-                                      seed=seed, **shipped_hparams(args.lang, os.path.join(ROOT, 'data')))
+            model, info = train_model(words[:-n_val], lang=args.lang, val_words=words[-n_val:], seed=seed)
             export_numpy_weights(model, info, f'{args.out}_s{seed}')
             print(f'{args.out}_s{seed}: {len(words) - n_val:,} training words, val loss {info["val_loss"]:.4f}')
         return

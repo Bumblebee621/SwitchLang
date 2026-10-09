@@ -40,11 +40,23 @@ from scripts.build_quadgrams import ALLOWED_EN, ALLOWED_HE
 EN_CHARS = sorted(ALLOWED_EN)
 HE_CHARS = sorted(ALLOWED_HE)
 
+# Training hyperparameters of the shipped model: the single definition every trainer,
+# k-fold run and tuner baseline reads. Change it here (after a tuning run) and nowhere else.
+GRU_HPARAMS = {
+    'emb_dim': 32,
+    'hidden_dim': 96,
+    'dropout': 0.05,
+    'lr': 0.004,
+    'weight_decay': 1e-4,
+    'batch_size': 512,
+    'epochs': 4,
+}
+
 
 class CharGRU(nn.Module):
     """Compact 1-layer character GRU language model with dropout regularization."""
 
-    def __init__(self, vocab_size, emb_dim=32, hidden_dim=96, dropout=0.05):
+    def __init__(self, vocab_size, emb_dim, hidden_dim, dropout):
         super().__init__()
         self.vocab_size = vocab_size
         self.emb_dim = emb_dim
@@ -137,9 +149,17 @@ def load_words_from_corpus(corpus_path, max_words=500_000, allowed_chars=None):
     return words
 
 
-def train_model(words, lang='en', emb_dim=32, hidden_dim=128, epochs=5, batch_size=512, lr=0.008,
-                dropout=0.1, weight_decay=1e-4, val_words=None, device=None, seed=0):
-    """Train the CharGRU model and return (model, vocab_info)."""
+def train_model(words, lang='en', val_words=None, device=None, seed=0, **hparams):
+    """Train the CharGRU model and return (model, vocab_info).
+
+    *hparams* override GRU_HPARAMS key by key; anything else is a typo and raises.
+    """
+    unknown = hparams.keys() - GRU_HPARAMS.keys()
+    if unknown:
+        raise TypeError(f"unknown hyperparameters: {sorted(unknown)}")
+    hp = {**GRU_HPARAMS, **hparams}
+    emb_dim, hidden_dim, dropout = hp['emb_dim'], hp['hidden_dim'], hp['dropout']
+    lr, weight_decay, batch_size, epochs = hp['lr'], hp['weight_decay'], hp['batch_size'], hp['epochs']
     # Fixed seed: unseeded runs on identical data differed up to 11x in benchmark FP rate.
     torch.manual_seed(seed)
     raw_chars = EN_CHARS if lang == 'en' else HE_CHARS
@@ -231,11 +251,7 @@ def train_model(words, lang='en', emb_dim=32, hidden_dim=128, epochs=5, batch_si
     vocab_info = {
         'lang': lang,
         'vocab_size': vocab_size,
-        'emb_dim': emb_dim,
-        'hidden_dim': hidden_dim,
-        'dropout': dropout,
-        'lr': lr,
-        'weight_decay': weight_decay,
+        **hp,
         'char_to_idx': char_to_idx,
         'idx_to_char': idx_to_char,
         'pad_idx': 0,
@@ -305,12 +321,9 @@ def main():
     parser = argparse.ArgumentParser(description="Train lightweight Char-GRU models for SwitchLang")
     parser.add_argument('--data-dir', default='data', help="Data directory containing corpora")
     parser.add_argument('--max-words', type=int, default=500_000, help="Word sample size per language")
-    parser.add_argument('--epochs', type=int, default=4, help="Training epochs")
-    parser.add_argument('--emb-dim', type=int, default=32, help="Character embedding dimension")
-    parser.add_argument('--hidden-dim', type=int, default=96, help="GRU hidden dimension")
-    parser.add_argument('--lr', type=float, default=0.004, help="Learning rate (default: 0.004)")
-    parser.add_argument('--dropout', type=float, default=0.05, help="Dropout probability (default: 0.05)")
-    parser.add_argument('--weight-decay', type=float, default=1e-4, help="L2 weight decay (default: 1e-4)")
+    for key, value in GRU_HPARAMS.items():
+        parser.add_argument('--' + key.replace('_', '-'), type=type(value), default=value,
+                            help=f"default: {value} (GRU_HPARAMS)")
     parser.add_argument('--lang', choices=['en', 'he', 'both'], default='both', help="Language to train")
     parser.add_argument('--val-frac', type=float, default=0.05,
                         help="Fraction of words held out (from the end of the corpus) for validation; 0 disables (default: 0.05)")
@@ -334,13 +347,8 @@ def main():
         model, vocab_info = train_model(
             train_words,
             lang=lang,
-            emb_dim=args.emb_dim,
-            hidden_dim=args.hidden_dim,
-            epochs=args.epochs,
-            lr=args.lr,
-            dropout=args.dropout,
-            weight_decay=args.weight_decay,
             val_words=val_words,
+            **{key: getattr(args, key) for key in GRU_HPARAMS},
         )
 
         output_base = os.path.join(data_dir, f"{lang}_char_gru")

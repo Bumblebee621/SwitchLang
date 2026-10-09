@@ -39,7 +39,7 @@ from evaluation.benchmark import (
     print_fp_report, print_fn_report,
 )
 from scripts.build_quadgrams import ALLOWED_EN, ALLOWED_HE, build_quadgrams_from_lines, save_model_data_to_trie
-from scripts.train_char_gru import train_model, export_numpy_weights, EN_CHARS, HE_CHARS
+from scripts.train_char_gru import GRU_HPARAMS, train_model, export_numpy_weights, EN_CHARS, HE_CHARS
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s]: %(message)s')
 logger = logging.getLogger('kfold_cv')
@@ -94,13 +94,6 @@ def extract_words_from_lines(lines, allowed_chars=None, max_words=300_000):
     return words
 
 
-def shipped_hparams(lang, data_dir):
-    """GRU hyperparameters of the shipped model, so each fold trains the same architecture."""
-    with open(os.path.join(data_dir, f'{lang}_char_gru.meta.json'), encoding='utf-8') as fh:
-        meta = json.load(fh)
-    return {key: meta[key] for key in ('emb_dim', 'hidden_dim', 'dropout', 'lr', 'weight_decay')}
-
-
 def load_pool(lang, data_dir, k, max_lines, train_words):
     """Unique lines of *lang*'s corpus, trimmed so the K-1 training folds hold ~*train_words* words."""
     lines = list(dict.fromkeys(load_corpus_lines(os.path.join(data_dir, f'{lang}_corpus.txt'), lang, cap=max_lines)))
@@ -116,7 +109,7 @@ def load_pool(lang, data_dir, k, max_lines, train_words):
     return lines
 
 
-def run_kfold_evaluation(lang, lines, k=5, deltas=(6.0,), epochs=3, jobs=8,
+def run_kfold_evaluation(lang, lines, k=5, deltas=(6.0,), epochs=GRU_HPARAMS['epochs'], jobs=8,
                          max_words=300_000, mode='technical', confirmations=2,
                          symmetric=False, other_lines=None, max_test_lines=None, folds=None,
                          fast_margin=FAST_SWITCH_MARGIN):
@@ -175,7 +168,7 @@ def run_kfold_evaluation(lang, lines, k=5, deltas=(6.0,), epochs=3, jobs=8,
             t0 = time.time()
             train_words_prim = extract_words_from_lines(train_lines_prim, allowed_chars=CHARS[lang], max_words=max_words)
             logger.info("Extracted %d train words for fold %d %s neural training", len(train_words_prim), f + 1, lang.upper())
-            neural_prim, vocab_prim = train_model(train_words_prim, lang=lang, epochs=epochs, **shipped_hparams(lang, data_dir))
+            neural_prim, vocab_prim = train_model(train_words_prim, lang=lang, epochs=epochs)
             neural_prim_base = os.path.join(temp_dir, f'neural_{lang}_f{f}')
             export_numpy_weights(neural_prim, vocab_prim, neural_prim_base)
             neural_prim_path = f"{neural_prim_base}.npz"
@@ -184,8 +177,7 @@ def run_kfold_evaluation(lang, lines, k=5, deltas=(6.0,), epochs=3, jobs=8,
             if symmetric and other_lines:
                 train_words_other = extract_words_from_lines(train_lines_other, allowed_chars=CHARS[other_lang], max_words=max_words)
                 logger.info("Extracted %d train words for fold %d %s shadow neural training", len(train_words_other), f + 1, other_lang.upper())
-                neural_other, vocab_other = train_model(train_words_other, lang=other_lang, epochs=epochs,
-                                                        **shipped_hparams(other_lang, data_dir))
+                neural_other, vocab_other = train_model(train_words_other, lang=other_lang, epochs=epochs)
                 neural_other_base = os.path.join(temp_dir, f'neural_{other_lang}_f{f}')
                 export_numpy_weights(neural_other, vocab_other, neural_other_base)
                 neural_other_path = f"{neural_other_base}.npz"
@@ -363,7 +355,7 @@ def main():
     parser.add_argument('--max-lines', type=int, default=150_000, help="Corpus lines read before dedupe and --train-words trimming (default: 150000)")
     parser.add_argument('--train-words', type=int, default=1_000_000, help="Words in each fold's training share, per language; 0 keeps every line read (default: 1000000)")
     parser.add_argument('--lang', choices=['en', 'he', 'both'], default='both', help="Language to evaluate")
-    parser.add_argument('--epochs', type=int, default=3, help="Neural training epochs per fold")
+    parser.add_argument('--epochs', type=int, default=GRU_HPARAMS['epochs'], help="Neural training epochs per fold (default: GRU_HPARAMS)")
     parser.add_argument('--jobs', type=int, default=8, help="Parallel evaluation jobs")
     parser.add_argument('--deltas', default='6.0', help="Comma-separated delta thresholds to score each fold at (default: 6.0)")
     parser.add_argument('--confirmations', type=int, default=2, help="Consecutive confirmations (default: 2)")
