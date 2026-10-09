@@ -1,58 +1,60 @@
 """
-test_tune_char_gru.py — Unit test for reusable CharGRU hyperparameter optimizer.
+test_tune_char_gru.py — objective A (FN at an FP budget) and the ablation pick.
 """
 
+import math
 import os
 import sys
 import unittest
 
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from scripts.tune_char_gru import tune_hyperparameters, BASELINE_PARAMS
+from scripts.tune_char_gru import ablations, best, fn_at_budget
+
+BUDGET = {'en': 0.10, 'he': 0.02}
 
 
-class TestTuneCharGRU(unittest.TestCase):
-    """Test suite for Char-GRU hyperparameter tuning routine."""
+def _fn(delta):
+    return {'en': {'fn': delta / 10, 'med': 5.0}, 'he': {'fn': delta / 20, 'med': 4.0}}
 
-    def test_tune_hyperparameters_runs_and_returns_valid_ranking(self):
-        """Verify tune_hyperparameters executes trials, ranks by validation loss, and identifies optimal params."""
-        sample_words = [
-            'hello', 'world', 'computer', 'science', 'switch', 'keyboard',
-            'neural', 'network', 'learning', 'python', 'fast', 'accuracy'
-        ] * 20
 
-        best_params, results = tune_hyperparameters(
-            sample_words,
-            lang='en',
-            trials=2,
-            epochs=1,
-            val_ratio=0.2,
-            seed=42,
-            verbose=False,
-        )
+class TestObjective(unittest.TestCase):
 
-        # 1. Best params contains all expected hyperparameter keys
-        for key in ['emb_dim', 'hidden_dim', 'lr', 'dropout', 'weight_decay', 'batch_size']:
-            self.assertIn(key, best_params)
+    def test_first_delta_within_budget_in_both_languages(self):
+        fps = {4.5: {'en': 0.3, 'he': 0.01}, 6.0: {'en': 0.08, 'he': 0.03}, 7.5: {'en': 0.05, 'he': 0.02}}
+        fn_calls = []
 
-        # 2. Results has correct trial count
-        self.assertEqual(len(results), 2)
+        def fn_at(d):
+            fn_calls.append(d)
+            return _fn(d)
 
-        # 3. Results are sorted in ascending order of validation loss
-        self.assertLessEqual(results[0]['val_loss'], results[1]['val_loss'])
+        res = fn_at_budget(fps.__getitem__, fn_at, BUDGET, deltas=(7.5, 4.5, 6.0))
+        self.assertEqual(res['delta'], 7.5)          # 6.0 fails HE, 4.5 fails EN
+        self.assertEqual(fn_calls, [7.5])            # FN only measured at the chosen delta
+        self.assertAlmostEqual(res['score'], 0.75 + 0.375)
+        self.assertEqual(res['med'], {'en': 5.0, 'he': 4.0})
 
-        # 4. Losses and perplexities are valid positive numbers
-        for r in results:
-            self.assertGreater(r['val_loss'], 0.0)
-            self.assertGreater(r['perplexity'], 1.0)
-            self.assertGreater(r['params_count'], 0)
-            self.assertGreater(r['size_kb'], 0.0)
+    def test_none_when_budget_never_met(self):
+        self.assertIsNone(fn_at_budget(lambda d: {'en': 1.0, 'he': 1.0}, _fn, BUDGET, deltas=(6.0, 9.0)))
 
-        # 5. Exactly one result is marked as baseline
-        baseline_entries = [r for r in results if r['is_baseline']]
-        self.assertEqual(len(baseline_entries), 1)
-        self.assertEqual(baseline_entries[0]['params'], BASELINE_PARAMS)
+
+class TestAblations(unittest.TestCase):
+
+    def _row(self, floor, margin, score):
+        return {'floor': floor, 'margin': margin, 'result': None if score is None else {'score': score}}
+
+    def test_each_restriction_gets_its_own_best(self):
+        rows = [self._row(0.05, 3.5, 2.0), self._row(0.0, 3.5, 2.5), self._row(0.0, 5.0, 2.2),
+                self._row(0.05, math.inf, 2.4), self._row(0.0, math.inf, None), self._row(0.1, 2.5, None)]
+        picked = ablations(rows)
+        self.assertEqual(picked['tuned'], rows[0])
+        self.assertEqual(picked['no floor, fast switch'], rows[2])
+        self.assertEqual(picked['floor, no fast switch'], rows[3])
+        self.assertEqual(picked['neither'], rows[4])   # infeasible, still reported
+
+    def test_best_ranks_infeasible_last(self):
+        rows = [self._row(0.0, 2.5, None), self._row(0.0, 3.5, 9.0)]
+        self.assertEqual(best(rows), rows[1])
 
 
 if __name__ == '__main__':

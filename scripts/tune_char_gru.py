@@ -45,6 +45,52 @@ from scripts.train_char_gru import (
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s]: %(message)s')
 logger = logging.getLogger('tune_char_gru')
 
+LANGS = ('en', 'he')
+BUDGET_DELTA = 6.0                                   # shipped baseline_delta
+DELTAS = (4.5, 6.0, 7.5, 9.0, 10.5, 12.0, 13.5, 15.0)
+FLOORS = (0.0, 0.02, 0.05, 0.1)
+MARGINS = (math.inf, 2.5, 3.5, 5.0)                  # inf = fast switch off
+
+
+def fn_at_budget(fp_at, fn_at, budget, deltas=DELTAS):
+    """Objective A: summed FN/1k at the smallest delta whose FP/1k is within *budget* in every language.
+
+    fp_at(delta) -> {lang: FP/1k}; fn_at(delta) -> {lang: {'fn': FN/1k, 'med': median latency}}.
+    Returns None when no delta qualifies (infeasible).
+    """
+    # ponytail: stops at the first passing delta, assuming FP falls and FN rises with delta;
+    # sweep every delta and take the min FN if a run ever shows otherwise.
+    for d in sorted(deltas):
+        fp = fp_at(d)
+        if all(fp[lang] <= budget[lang] for lang in budget):
+            fn = fn_at(d)
+            return {'delta': d, 'fp': fp,
+                    'fn': {lang: v['fn'] for lang, v in fn.items()},
+                    'med': {lang: v['med'] for lang, v in fn.items()},
+                    'score': sum(v['fn'] for v in fn.values())}
+    return None
+
+
+def rank_key(row):
+    """Feasible rows by score, infeasible rows last."""
+    return (row['result'] is None, row['result']['score'] if row['result'] else 0.0)
+
+
+def best(rows, keep=lambda r: True):
+    """Best-ranked row passing *keep*, or None."""
+    return min((r for r in rows if keep(r)), key=rank_key, default=None)
+
+
+def ablations(rows):
+    """The tuned floor/margin and the three ablations, each at its own best phase-2 setting."""
+    return {
+        'tuned': best(rows),
+        'no floor, fast switch': best(rows, lambda r: r['floor'] == 0 and r['margin'] != math.inf),
+        'floor, no fast switch': best(rows, lambda r: r['floor'] > 0 and r['margin'] == math.inf),
+        'neither': best(rows, lambda r: r['floor'] == 0 and r['margin'] == math.inf),
+    }
+
+
 # Production baseline hyperparameters
 BASELINE_PARAMS = {
     'emb_dim': 64,
