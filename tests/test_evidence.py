@@ -34,8 +34,9 @@ class TestEvidence(unittest.TestCase):
         self.assertTrue(switch)
 
     def test_mixed_counts_over_and_under_correction(self):
-        # prefix p1 p2 p3 | suffix s1 s2 s3: p3 and s1 lean, s2 switches.
-        # Block = [p3, s1] -> one prefix word wrongly flipped, no suffix word missed.
+        # prefix פא פב פג | suffix sa sb sc: פג and sa lean, sb switches.
+        # Block = [פג, sa] -> one prefix word wrongly flipped, no suffix word missed.
+        # Hebrew-letter prefix: test_mixed keeps only characters the hook buffers.
         script = iter([(False, False), (False, False), (False, True), (False, True), (True, False)])
         harness = EvaluationHarness.__new__(EvaluationHarness)  # no models needed
 
@@ -44,10 +45,10 @@ class TestEvidence(unittest.TestCase):
             return WordResult(word, word, word, switched, is_ambiguous=amb)
         harness._simulate_word = fake
 
-        report = harness.test_mixed([('s1 s2 s3', 'p1 p2 p3')], 'en', n_prefix=3, progress=False)
+        report = harness.test_mixed([('sa sb sc', 'פא פב פג')], 'en', n_prefix=3, progress=False)
 
         self.assertEqual((report.over_corrected, report.uncorrected), (1, 0))
-        self.assertEqual(report.latency_values, [6])   # 's1 ' + 's2 '
+        self.assertEqual(report.latency_values, [6])   # 'sa ' + 'sb '
 
 
 if __name__ == '__main__':

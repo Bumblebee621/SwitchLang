@@ -38,11 +38,40 @@ if sys.stdout.encoding != 'utf-8':
 # Project imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.engine import EvaluationEngine
+from core.engine import EvaluationEngine, FAST_SWITCH_MARGIN
 from core.quadgram import load_models, QuadgramModel
 from core.neural_model import load_neural_models, CharNeuralModel
 from core.sensitivity import SensitivityManager
-from core.keymap import shadow
+from core.keymap import shadow, VK_TO_CHARS, VK_TO_CHARS_SHIFT
+from scripts.build_quadgrams import ALLOWED_EN, ALLOWED_HE
+
+# Typographic characters a keyboard does not produce, mapped to what the user would type
+# instead; invisible direction/joiner marks are deleted.
+_TO_TYPED = str.maketrans({
+    '–': '-', '—': '-', '‐': '-', '‑': '-', '−': '-',
+    '‘': "'", '’': "'", '‚': "'", '´': "'", '׳': "'",
+    '“': '"', '”': '"', '„': '"', '«': '"', '»': '"', '״': '"',
+    '…': '...', '\u00a0': ' ',
+    '\u200b': None, '\u200c': None, '\u200d': None, '\u200e': None, '\u200f': None, '\ufeff': None,
+})
+_DIGITS = set('0123456789')
+TYPEABLE = {
+    'en': ALLOWED_EN | _DIGITS | set('ABCDEFGHIJKLMNOPQRSTUVWXYZ'),
+    'he': ALLOWED_HE | _DIGITS,
+}
+
+# Characters hooks.py adds to its buffers: keys with no entry in the VK tables (digits,
+# the shifted number row) are typed but never buffered, so the engine never scores them.
+_HOOK_CHARS = {
+    lang: {pair[i] for table in (VK_TO_CHARS, VK_TO_CHARS_SHIFT) for pair in table.values()}
+    for i, lang in enumerate(('en', 'he'))
+}
+
+
+def hook_words(line, lang):
+    """Split *line* into words as the hook buffers them; words left empty are never evaluated."""
+    keep = _HOOK_CHARS[lang]
+    return [t for t in (''.join(c for c in w if c in keep) for w in line.split()) if t]
 
 # Re-use the same namedtuple that hooks.py uses for lookback history
 _WordEntry = collections.namedtuple(
@@ -133,8 +162,9 @@ class EvaluationHarness:
 
     def __init__(self, data_dir, en_model_path=None, he_model_path=None,
                  mode='standard', req_confirmations=2, model_type='quadgram',
-                 accumulate=True, alpha=0.1):
+                 accumulate=True, alpha=0.1, fast_margin=FAST_SWITCH_MARGIN):
         self.model_type = model_type
+        self.fast_margin = fast_margin
         self.accumulate = accumulate
         self.alpha = alpha
         if model_type == 'neural':
@@ -168,6 +198,7 @@ class EvaluationHarness:
                 model_type='quadgram'
             )
         self.req_confirmations = req_confirmations
+        self._neural_cache = {}
 
     def _score_text_detailed(self, text, layout):
         """Score text and return (total_score, state_dict) for incremental tracking."""
@@ -257,6 +288,39 @@ class EvaluationHarness:
         log_probs, h = model.step(ch, h)
         return total, log_probs, h
 
+    def _neural_scores(self, current_layout, buf_active, buf_shadow):
+        """GRU scores of a word: ((active, shadow) after each keystroke from the third on,
+        active and shadow scores at the delimiter).
+
+        Depends only on the arguments, and 84–95% of test words are repeats, so it's
+        memoized; the decision logic in _simulate_word still runs on every word.
+        """
+        key = (current_layout, buf_active, buf_shadow)
+        hit = self._neural_cache.get(key)
+        if hit is not None:
+            return hit
+        if current_layout == 'en':
+            model_a, model_s = self.engine.en_model, self.engine.he_model
+        else:
+            model_a, model_s = self.engine.he_model, self.engine.en_model
+        # Incremental equivalent of model.score(' ' + prefix): one GRU step per
+        # keystroke instead of re-running the whole prefix (same floats, same order).
+        state_a = self._neural_start(model_a, buf_active[:2])
+        state_s = self._neural_start(model_s, buf_shadow[:2])
+        steps = []
+        for i in range(2, len(buf_active)):
+            state_a = self._neural_advance(model_a, state_a, buf_active[i])
+            state_s = self._neural_advance(model_s, state_s, buf_shadow[i])
+            steps.append((state_a[0], state_s[0]))
+        hit = (tuple(steps),
+               state_a[0] + float(state_a[1][model_a.char_to_idx[' ']]),
+               state_s[0] + float(state_s[1][model_s.char_to_idx[' ']]))
+        if len(self._neural_cache) >= 500_000:
+            # ponytail: wholesale clear bounds memory (~150 MB per worker); LRU if hit rate suffers
+            self._neural_cache.clear()
+        self._neural_cache[key] = hit
+        return hit
+
     def _prior(self, history):
         """Evidence carried into the next word: the last entry's, 0 after a clear."""
         return history[-1].evidence if (self.accumulate and history) else 0.0
@@ -268,22 +332,11 @@ class EvaluationHarness:
         target_layout = 'he' if current_layout == 'en' else 'en'
         consecutive_hits = 0
         if self.model_type == 'neural':
-            if current_layout == 'en':
-                model_a, model_s = self.engine.en_model, self.engine.he_model
-            else:
-                model_a, model_s = self.engine.he_model, self.engine.en_model
-            # Incremental equivalent of model.score(' ' + prefix): one GRU step per
-            # keystroke instead of re-running the whole prefix (same floats, same order).
-            state_a = self._neural_start(model_a, buf_active[:2])
-            state_s = self._neural_start(model_s, buf_shadow[:2])
+            steps, score_a_del, score_s_del = self._neural_scores(current_layout, buf_active, buf_shadow)
             consecutive_hits = 0
-            for i in range(2, len(buf_active)):
+            for i, (score_a, score_s) in enumerate(steps, 2):
                 partial_a = buf_active[:i + 1]
                 partial_s = buf_shadow[:i + 1]
-
-                state_a = self._neural_advance(model_a, state_a, buf_active[i])
-                state_s = self._neural_advance(model_s, state_s, buf_shadow[i])
-                score_a, score_s = state_a[0], state_s[0]
 
                 diff = score_s - score_a
                 coll = self.engine.check_collision(partial_a, partial_s)
@@ -292,8 +345,8 @@ class EvaluationHarness:
 
                 if should:
                     consecutive_hits += 1
-                    # Adaptive K: decisive score (> delta + 2.5) switches at K=1 (character 3!)
-                    effective_k = 1 if (diff + evidence > sensitivity.delta + 2.5) else self.req_confirmations
+                    # Adaptive K, as hooks.py: a decisive score switches on this keystroke.
+                    effective_k = 1 if (diff + evidence > sensitivity.delta + self.fast_margin) else self.req_confirmations
                     if consecutive_hits >= effective_k:
                         return WordResult(
                             word=word, buffer_active=buf_active, buffer_shadow=buf_shadow,
@@ -305,9 +358,6 @@ class EvaluationHarness:
                     consecutive_hits = 0
 
             # Delimiter evaluation
-            score_a_del = state_a[0] + float(state_a[1][model_a.char_to_idx[' ']])
-            score_s_del = state_s[0] + float(state_s[1][model_s.char_to_idx[' ']])
-
             diff = score_s_del - score_a_del
             coll = self.engine.check_collision(buf_active, buf_shadow)
             should = (diff + evidence > sensitivity.delta) if not coll else False
@@ -349,7 +399,8 @@ class EvaluationHarness:
 
             if should:
                 consecutive_hits += 1
-                if consecutive_hits >= self.req_confirmations:
+                effective_k = 1 if (diff + evidence > sensitivity.delta + self.fast_margin) else self.req_confirmations
+                if consecutive_hits >= effective_k:
                     return WordResult(
                         word=word, buffer_active=buf_active, buffer_shadow=buf_shadow,
                         switched=True, switch_char_idx=i,
@@ -426,7 +477,7 @@ class EvaluationHarness:
         correct = text_lang
 
         for line_num, line in enumerate(lines, line_offset + 1):
-            words = line.strip().split()
+            words = hook_words(line, text_lang)
             if not words:
                 continue
             report.lines_tested += 1
@@ -501,7 +552,7 @@ class EvaluationHarness:
         wrong = self._other(text_lang)
 
         for line_num, line in enumerate(lines, line_offset + 1):
-            words = line.strip().split()
+            words = hook_words(line, text_lang)
             if not words:
                 continue
             report.lines_tested += 1
@@ -617,8 +668,8 @@ class EvaluationHarness:
         other = self._other(text_lang)
 
         for line, prefix_line in pairs:
-            prefix = prefix_line.split()[:n_prefix]
-            suffix = line.split()
+            prefix = hook_words(prefix_line, other)[:n_prefix]
+            suffix = hook_words(line, text_lang)
             if len(prefix) < n_prefix or not suffix:
                 continue
             report.cases += 1
@@ -730,13 +781,13 @@ atexit.register(shutdown_pool)
 def run_test(test, lines, lang, delta, data_dir, en_model_path=None,
              he_model_path=None, mode='standard', jobs=11,
              req_confirmations=2, model_type='quadgram', accumulate=True, alpha=0.1,
-             **kw):
+             fast_margin=FAST_SWITCH_MARGIN, **kw):
     """Run the 'fp', 'fn' or 'mixed' test over *lines*, optionally across processes.
 
     For 'mixed', *lines* are (line, prefix_line) pairs and *kw* carries n_prefix.
     """
     key = (data_dir, en_model_path, he_model_path, mode, req_confirmations, model_type,
-           accumulate, alpha)
+           accumulate, alpha, fast_margin)
 
     if jobs <= 1:
         return _test_method(EvaluationHarness(*key), test)(lines, lang, delta, **kw)
@@ -761,13 +812,17 @@ def run_test(test, lines, lang, delta, data_dir, en_model_path=None,
 def load_corpus_lines(path, lang, cap=None):
     """Read *path*, keeping non-empty lines written purely in *lang*'s script.
 
+    Typographic characters are normalised to their typed form, then words still holding
+    a character outside TYPEABLE[lang] are dropped.
+
     Mixed-script lines are excluded: a real layout switch fires a CRE, so each
     script run is an independent segment rather than one continuous context.
     """
     lines = []
+    typeable = TYPEABLE[lang]
     with open(path, 'r', encoding='utf-8') as f:
         for l in f:
-            l = l.strip()
+            l = l.translate(_TO_TYPED).strip()
             if not l:
                 continue
 
@@ -778,6 +833,11 @@ def load_corpus_lines(path, lang, cap=None):
             if lang == 'he' and (not has_hebrew or has_english or has_nikud):
                 continue
             if lang == 'en' and (not has_english or has_hebrew):
+                continue
+
+            # A word with a character no key produces could never reach the engine.
+            l = ' '.join(w for w in l.split() if set(w) <= typeable)
+            if not l:
                 continue
 
             lines.append(l)
@@ -1100,6 +1160,11 @@ def main():
         help='Sensitivity decay alpha (default: 0.1, the shipped value).',
     )
     parser.add_argument(
+        '--fast-margin', type=float, default=FAST_SWITCH_MARGIN,
+        help=f'Mid-word margin past delta that switches without a second confirmation '
+             f'(default: {FAST_SWITCH_MARGIN}, the shipped value).',
+    )
+    parser.add_argument(
         '--mixed', default=None, metavar='N[,N]',
         help='With --variants: also run the "forgot to switch" test after N correct '
              'words of the other language, e.g. "3,6".',
@@ -1204,7 +1269,7 @@ def main():
             common = dict(data_dir=args.data_dir, en_model_path=args.en_model,
                           he_model_path=args.he_model, mode=args.mode, jobs=args.jobs,
                           req_confirmations=k, model_type=args.model_type,
-                          accumulate=acc, alpha=a)
+                          accumulate=acc, alpha=a, fast_margin=args.fast_margin)
             t0 = time.time()
             fp = run_test('fp', lines, args.lang, d, **common)
             fn = run_test('fn', lines, args.lang, d, **common)
@@ -1259,7 +1324,7 @@ def main():
     common = dict(data_dir=args.data_dir, en_model_path=args.en_model,
                   he_model_path=args.he_model, mode=args.mode, jobs=args.jobs,
                   req_confirmations=args.confirmations, model_type=args.model_type,
-                  alpha=args.alpha)
+                  alpha=args.alpha, fast_margin=args.fast_margin)
 
     report_kwargs = dict(delta=args.baseline_delta, req_confirmations=args.confirmations,
                           mode=args.mode, jobs=args.jobs)

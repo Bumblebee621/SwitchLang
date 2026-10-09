@@ -84,7 +84,7 @@ def _process_chunk(lines, allowed_chars=None):
 
     return quadgram_counts, trigram_counts, bigram_counts, chars
 
-def build_quadgrams_from_lines(lines, allowed_chars=None, min_count=MIN_QUADGRAM_COUNT):
+def build_quadgrams_from_lines(lines, allowed_chars=None, min_count=MIN_QUADGRAM_COUNT, num_workers=None):
     """
     Builds n-gram models via parallel processing from an iterable of lines.
 
@@ -96,6 +96,7 @@ def build_quadgrams_from_lines(lines, allowed_chars=None, min_count=MIN_QUADGRAM
         allowed_chars (set, optional): Set of allowed characters for filtering words.
         min_count (int): Quadgrams at or below this count are dropped.
             Pass 0 to keep the full tail (used by the k-fold harness).
+        num_workers (int, optional): Worker processes; defaults to all cores.
 
     Returns:
         dict: A dictionary containing the aggregated 'quadgram_counts',
@@ -106,7 +107,7 @@ def build_quadgrams_from_lines(lines, allowed_chars=None, min_count=MIN_QUADGRAM
     total_bis = Counter()
     total_chars = set()
 
-    num_workers = os.cpu_count() or 4
+    num_workers = num_workers or os.cpu_count() or 4
     logger.info(f"Building models using {num_workers} processes...")
 
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
