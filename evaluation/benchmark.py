@@ -40,7 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.engine import EvaluationEngine, FAST_SWITCH_MARGIN
 from core.quadgram import load_models, QuadgramModel
-from core.neural_model import load_neural_models, CharNeuralModel
+from core.neural_model import CharNeuralModel, UNIGRAM_FLOOR
 from core.sensitivity import SensitivityManager
 from core.keymap import shadow, VK_TO_CHARS, VK_TO_CHARS_SHIFT
 from scripts.build_quadgrams import ALLOWED_EN, ALLOWED_HE
@@ -162,17 +162,16 @@ class EvaluationHarness:
 
     def __init__(self, data_dir, en_model_path=None, he_model_path=None,
                  mode='standard', req_confirmations=2, model_type='quadgram',
-                 accumulate=True, alpha=0.1, fast_margin=FAST_SWITCH_MARGIN):
+                 accumulate=True, alpha=0.1, floor=UNIGRAM_FLOOR, fast_margin=FAST_SWITCH_MARGIN):
         self.model_type = model_type
         self.fast_margin = fast_margin
         self.accumulate = accumulate
         self.alpha = alpha
         if model_type == 'neural':
-            models = load_neural_models(data_dir)
-            if en_model_path:
-                models['en'] = CharNeuralModel(en_model_path)
-            if he_model_path:
-                models['he'] = CharNeuralModel(he_model_path)
+            # Explicit paths skip the shipped files entirely; the floor applies to both models.
+            paths = {'en': en_model_path or os.path.join(data_dir, 'en_char_gru.npz'),
+                     'he': he_model_path or os.path.join(data_dir, 'he_char_gru.npz')}
+            models = {lang: CharNeuralModel(path, floor=floor) for lang, path in paths.items()}
             collisions_path = os.path.join(data_dir, 'collisions.json')
             self.engine = EvaluationEngine(
                 models['en'], models['he'],
@@ -720,9 +719,9 @@ class EvaluationHarness:
 # Every line resets layout, sensitivity and history, so lines are independent
 # and splitting them across processes reproduces the serial result exactly.
 
-# Size 1: a variant is scored FP then FN, so the second call reuses the models
-# while memory stays at one model set per worker rather than one per variant.
-_worker_models = (None, None)
+# Keyed by harness settings (not fast_margin), so a margin sweep reuses the harness and its
+# GRU score cache; a variant is scored FP then FN with the same key too.
+_worker_harnesses = {}
 
 
 def _test_method(harness, test):
@@ -731,12 +730,16 @@ def _test_method(harness, test):
 
 
 def _run_chunk(job):
-    global _worker_models
-    test, offset, lines, lang, delta, key, kw = job
-    if _worker_models[0] != key:
-        _worker_models = (key, EvaluationHarness(*key))
-    return _test_method(_worker_models[1], test)(
-        lines, lang, delta, line_offset=offset, progress=False, **kw)
+    test, offset, lines, lang, delta, key, fast_margin, kw = job
+    harness = _worker_harnesses.get(key)
+    if harness is None:
+        if len(_worker_harnesses) >= 4:
+            # ponytail: drop all, bounds memory (each harness caches up to ~150 MB of GRU scores); LRU if seeds > 4
+            _worker_harnesses.clear()
+        harness = _worker_harnesses[key] = EvaluationHarness(*key)
+    # The margin only gates the decision, not the cached scores, so sweeping it keeps the cache.
+    harness.fast_margin = fast_margin
+    return _test_method(harness, test)(lines, lang, delta, line_offset=offset, progress=False, **kw)
 
 
 def _merge_reports(reports):
@@ -781,21 +784,23 @@ atexit.register(shutdown_pool)
 def run_test(test, lines, lang, delta, data_dir, en_model_path=None,
              he_model_path=None, mode='standard', jobs=11,
              req_confirmations=2, model_type='quadgram', accumulate=True, alpha=0.1,
-             fast_margin=FAST_SWITCH_MARGIN, **kw):
+             floor=UNIGRAM_FLOOR, fast_margin=FAST_SWITCH_MARGIN, **kw):
     """Run the 'fp', 'fn' or 'mixed' test over *lines*, optionally across processes.
 
     For 'mixed', *lines* are (line, prefix_line) pairs and *kw* carries n_prefix.
     """
     key = (data_dir, en_model_path, he_model_path, mode, req_confirmations, model_type,
-           accumulate, alpha, fast_margin)
+           accumulate, alpha, floor)
 
     if jobs <= 1:
-        return _test_method(EvaluationHarness(*key), test)(lines, lang, delta, **kw)
+        harness = EvaluationHarness(*key)
+        harness.fast_margin = fast_margin
+        return _test_method(harness, test)(lines, lang, delta, **kw)
 
     # Several chunks per worker keeps them busy when line lengths vary.
     n_chunks = jobs * 4
     size = max(1, -(-len(lines) // n_chunks))
-    chunks = [(test, i, lines[i:i + size], lang, delta, key, kw)
+    chunks = [(test, i, lines[i:i + size], lang, delta, key, fast_margin, kw)
               for i in range(0, len(lines), size)]
 
     t0 = time.time()
