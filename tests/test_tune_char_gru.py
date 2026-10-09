@@ -12,7 +12,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import scripts.tune_char_gru as tune
-from scripts.tune_char_gru import BASELINE_PARAMS, ablations, best, coarse_candidates, fine_candidates, weighted_cost
+from scripts.tune_char_gru import BASELINE_PARAMS, ablations, best, coarse_candidates, cost_halfwidth, fine_candidates, weighted_cost
 
 FPS = {6.0: {'en': 0.30, 'he': 0.02}, 7.5: {'en': 0.10, 'he': 0.01}, 9.0: {'en': 0.05, 'he': 0.0}}
 
@@ -37,6 +37,15 @@ class TestWeightedCost(unittest.TestCase):
         self.assertEqual(weighted_cost(FPS.__getitem__, _fn, deltas=(6.0, 7.5, 9.0), w=1)['delta'], 6.0)
 
 
+class TestCostHalfwidth(unittest.TestCase):
+
+    def test_poisson_halfwidth_of_weighted_rates(self):
+        # 4 FP in 40k words: rate 0.1/1k, sd 0.05/1k; weight 10 -> sd 0.5 -> 95% half-width 0.98
+        self.assertAlmostEqual(cost_halfwidth([(10, 4, 40_000)]), 0.98)
+        # independent terms add in variance: sqrt(0.5^2 + 0.25^2) * 1.96
+        self.assertAlmostEqual(cost_halfwidth([(10, 4, 40_000), (1, 25, 20_000)]), 1.96 * (0.25 + 0.0625) ** 0.5)
+
+
 class TestPhase1Overlap(unittest.TestCase):
 
     def test_trains_off_main_thread_and_keeps_rows_aligned(self):
@@ -49,7 +58,7 @@ class TestPhase1Overlap(unittest.TestCase):
         def fake_score(pairs, split, floor, margin, data_dir, jobs):
             s = -float(pairs[0]['en_model_path'][1:].split('_')[0])   # bigger emb_dim = better
             zero = {'en': 0.0, 'he': 0.0}
-            return {'delta': 6.0, 'fp': zero, 'fn': zero, 'med': zero, 'score': s}
+            return {'delta': 6.0, 'fp': zero, 'fn': zero, 'med': zero, 'score': s, 'ci': 0.0}
 
         cands = [{**BASELINE_PARAMS, 'emb_dim': e} for e in (8, 16, 24)]
         with mock.patch.object(tune, 'train_pair', fake_train_pair), mock.patch.object(tune, 'score', fake_score):

@@ -47,7 +47,7 @@ from scripts.train_char_gru import GRU_HPARAMS, export_numpy_weights, train_mode
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s]: %(message)s')
 logger = logging.getLogger('tune_char_gru')
 
-K = 5   # held-out test = every K-th line, as fold 1 of kfold_cv
+K = 8   # held-out test = every K-th line, so test words ≈ train words / (K - 1)
 
 # Candidate #0: the shipped training setup. Epochs are not searched.
 BASELINE_PARAMS = {k: v for k, v in GRU_HPARAMS.items() if k != 'epochs'}
@@ -75,6 +75,16 @@ def weighted_cost(fp_at, fn_at, deltas=DELTAS, w=W_FP):
                         'med': {lang: v['med'] for lang, v in fn.items()},
                         'score': cost}
     return best_res
+
+
+def cost_halfwidth(terms):
+    """95% half-width of a weighted sum of per-1k-word rates, from Poisson noise of the test sample.
+
+    terms: (weight, events, words) per rate. Seeds share the test lines, so *events* is the per-seed
+    mean, not the pooled count. Model noise across seeds is not included.
+    """
+    # ponytail: 0 observed events is floored to 1 so a lucky zero-FP run doesn't report ±0; exact Poisson CIs if it matters
+    return 1.96 * math.sqrt(sum((weight * 1000 / words) ** 2 * max(events, 1) for weight, events, words in terms))
 
 
 def rank_key(row):
@@ -174,7 +184,8 @@ def train_one(lang, hp, seed, split, work_dir, memo):
     if key not in memo:
         words = split['words'][lang]
         n_val = len(words) // 20   # corpus-tail 5% held out, as train_char_gru does
-        model, info = train_model(words[:-n_val], lang=lang, val_words=words[-n_val:], seed=seed, **hp)
+        model, info = train_model(words[:-n_val], lang=lang, val_words=words[-n_val:], seed=seed,
+                                  **{**hp, 'epochs': split['epochs']})
         base = os.path.join(work_dir, f'gru{len(memo)}_{lang}')
         export_numpy_weights(model, info, base)
         memo[key] = (f'{base}.npz', info['val_loss'])
@@ -195,9 +206,15 @@ def train_pair(hp, searched, split, seed, work_dir, memo):
 
 def score(pairs, split, floor, margin, data_dir, jobs, model_type='neural'):
     """Weighted cost for one floor/margin, FP and FN averaged over the seed model *pairs*."""
+    counts = {}   # (test, lang, delta) -> (mean events per seed, test words)
+
     def run(test, lang, delta):
-        return [run_test(test, split['test'][lang], lang, delta, data_dir, jobs=jobs,
-                         model_type=model_type, floor=floor, fast_margin=margin, **p) for p in pairs]
+        reports = [run_test(test, split['test'][lang], lang, delta, data_dir, jobs=jobs,
+                             model_type=model_type, floor=floor, fast_margin=margin, **p) for p in pairs]
+        counts[test, lang, delta] = (
+            statistics.mean(r.fp_count if test == 'fp' else r.words_not_switched for r in reports),
+            reports[0].words_tested)
+        return reports
 
     def fp_at(delta):
         return {lang: statistics.mean(r.fp_per_1k for r in run('fp', lang, delta)) for lang in LANGS}
@@ -212,6 +229,8 @@ def score(pairs, split, floor, margin, data_dir, jobs, model_type='neural'):
         return out
 
     res = weighted_cost(fp_at, fn_at)
+    res['ci'] = cost_halfwidth([(W_FP if test == 'fp' else 1, *counts[test, lang, res['delta']])
+                                for test in ('fp', 'fn') for lang in LANGS])
     if res['delta'] in (min(DELTAS), max(DELTAS)):
         logger.warning("best delta %g is at the edge of DELTAS %s; widen the grid", res['delta'], DELTAS)
     return res
@@ -252,7 +271,7 @@ def _fmt(res):
     if res is None:
         return "n/a"
     return (f"Δ{res['delta']:<5g} FP en {res['fp']['en']:.3f} he {res['fp']['he']:.3f} | "
-            f"FN en {res['fn']['en']:.3f} he {res['fn']['he']:.3f} cost {res['score']:.3f} | "
+            f"FN en {res['fn']['en']:.3f} he {res['fn']['he']:.3f} cost {res['score']:.3f} ±{res['ci']:.2f} | "
             f"med lat en {res['med']['en']:.1f} he {res['med']['he']:.1f}")
 
 
@@ -283,6 +302,7 @@ def main():
     parser.add_argument('--data-dir', default='data')
     parser.add_argument('--max-lines', type=int, default=150_000, help="Corpus lines read per language (default: 150000)")
     parser.add_argument('--train-words', type=int, default=1_000_000, help="Training words per language (default: 1000000)")
+    parser.add_argument('--epochs', type=int, default=GRU_HPARAMS['epochs'], help=f"Training epochs per GRU (default: {GRU_HPARAMS['epochs']})")
     parser.add_argument('--trials', type=int, default=12, help="Random-search candidates, baseline included (default: 12)")
     parser.add_argument('--seeds', type=int, nargs='+', default=[0, 1], help="Training seeds per candidate (default: 0 1)")
     parser.add_argument('--sample-seed', type=int, default=42, help="Seed for drawing random candidates (default: 42)")
@@ -297,6 +317,7 @@ def main():
     try:
         with logging_redirect_tqdm():
             split = prepare_split(data_dir, args.max_lines, args.train_words, args.jobs, work_dir)
+            split['epochs'] = args.epochs
 
             def run(candidates, desc):
                 return phase1(candidates, desc, searched, split, args.seeds, data_dir, args.jobs, work_dir, memo)
@@ -312,7 +333,8 @@ def main():
         if args.out:
             with open(args.out, 'w', encoding='utf-8') as fh:
                 json.dump({'lang': args.lang, 'mode': 'coarse-to-fine' if args.coarse_to_fine else 'random',
-                           'reference': split['reference'], 'w_fp': W_FP, 'seeds': args.seeds,
+                           'reference': split['reference'], 'w_fp': W_FP, 'seeds': args.seeds, 'epochs': args.epochs,
+                           'train_words': args.train_words, 'k': K,
                            'phase1': [{k: v for k, v in r.items() if k != 'pairs'} for r in p1],
                            'phase2': p2, 'comparison': comparison}, fh, indent=2)
     finally:
