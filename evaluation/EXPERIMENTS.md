@@ -339,3 +339,48 @@ Measured across 100,000 lines per language via `evaluation/benchmark.py --varian
 1. **−29.4% False Positive Reduction**: Over 5.96M words, false switches dropped from 1,595 to 1,126 (469 false switches prevented).
 2. **Improved Error Detection**: Because $\Delta$ was lowered to 3.5, false negatives dropped by −4.6% (1,366 more real errors caught).
 3. **Median Latency Unchanged**: Median detection latency is identical at 4.0 characters on Hebrew, and moves from 3.0 to 4.0 on English.
+
+## Char-GRU tuning by weighted cost (10·FP + FN) — measured (2026-10-09)
+
+### Setup
+
+`scripts/tune_char_gru.py --lang en --coarse-to-fine --seeds 0 1 --epochs 3 --train-words 300000`. K=8 held-out split, ~43k test words per language. Only the EN GRU's hyperparameters are searched; the HE GRU stays at baseline. Cost = 10·(FP_en+FP_he) + FN_en + FN_he per 1k words, at the cheapest Δ in 6.0–13.5. The ± is a 95% Poisson half-width from test-set counting noise only; it excludes seed noise. Phase 1 runs at unigram floor 0.05 / fast-switch margin 3.5.
+
+History: a first run ranked by FN at a quadgram FP budget was stopped, because scores jumped between Δ buckets on <1 FP event. A second weighted-cost run at 1M training words / 250k test words was lost when its session ended after 1 config.
+
+### Phase 1 — 45 EN hyperparameter configs
+
+| Config (emb/hid/drop/lr/wd/bs) | Δ | FP en | FP he | FN en | FN he | Cost |
+|---|---|---|---|---|---|---|
+| Quadgram reference | 6.0 | 0.024 | 0.046 | 1.233 | 1.737 | 3.67 ±0.95 |
+| 64/80/0.05/0.006/1e-4/512 (best) | 7.5 | 0.024 | 0.000 | 1.269 | 1.540 | **3.05 ±0.82** |
+| 64/80/0.10/0.006/1e-4/256 | 7.5 | 0.024 | 0.000 | 1.387 | 1.517 | 3.14 ±0.83 |
+| 32/96/0.05/0.008/1e-4/512 | 7.5 | 0.059 | 0.000 | 1.340 | 1.274 | 3.21 ±0.99 |
+| 32/96/0.05/0.004/1e-4/512 (baseline) | 10.5 | 0.012 | 0.000 | 1.767 | 1.923 | 3.81 ±0.87 |
+| 64/80/0.05/0.006/1e-5/128 (worst) | 7.5 | 0.154 | 0.000 | 1.103 | 1.622 | 4.27 ±1.36 |
+
+### Phase 2 — floor and fast-switch margin on the phase-1 winner
+
+Margin (2.5, 3.5, 5.0, off) gave identical FP/FN at every floor, so one row per floor.
+
+| Unigram floor | Δ chosen | FP en | FN he | Cost |
+|---|---|---|---|---|
+| 0 | 10.5 | 0.059 | 2.432 | 4.28 ±1.04 |
+| 0.02 | 9.0 | 0.024 | 2.004 | 3.53 ±0.85 |
+| **0.05** | 7.5 | 0.024 | 1.540 | **3.05 ±0.82** |
+| 0.1 | 7.5 | 0.024 | 1.818 | 3.34 ±0.84 |
+
+### Findings
+
+1. **The phase-1 ranking is mostly noise.** The spread of cost across the 45 configs (sd 0.28) is smaller than one config's measurement sd (~0.45, from ±0.82–1.36). EN FP averages ~3 events per config. The winner (3.05 ±0.82) vs baseline (3.81 ±0.87) is not significant, and the minimum of 45 noisy draws is expected to sit ~1 below the mean by chance alone (winner's curse).
+2. **Validation loss does not track cost** (Spearman ρ ≈ −0.02 over 45 configs). With cost this noisy, that cannot distinguish "val loss is a bad proxy" from "cost has no real signal at this test size".
+3. **The unigram floor is the one robust effect.** Same models: floor 0 → 4.28, 0.02 → 3.53, 0.05 → 3.05, 0.1 → 3.34. Without the floor, FP rises, the best Δ moves up to 10.5, and HE FN rises (1.54 → 2.43 per 1k, ~66 vs ~104 events, about 3 Poisson sd).
+4. **The fast-switch margin changed nothing in FP/FN at any floor.** Its only effect is latency, which the cost does not include.
+
+### Caveats
+
+- One split; ~43k test words per language.
+- 300k training words / 3 epochs, smaller than shipping.
+- Seed noise is excluded from the ±.
+- HE GRU not tuned.
+- The quadgram reference was also built from 300k words and chose Δ6, the grid edge.
