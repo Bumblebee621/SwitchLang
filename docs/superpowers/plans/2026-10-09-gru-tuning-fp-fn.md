@@ -854,6 +854,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ### Task 5: Run the tuner and record the comparison
 
+> **Run this after Task 6.** The first launch (FN at an FP budget) was stopped 8 configs in: scores jumped between Δ7.5 and Δ9 depending on which side of the budget a config fell, by less than one FP event. Task 6 switches the objective to a weighted cost and overlaps GPU training with CPU scoring.
+
 **Files:**
 - Create: `evaluation/tune_char_gru_en.json`, `evaluation/tune_char_gru_en.log` (outputs)
 - Modify: `evaluation/EXPERIMENTS.md` (new section at the end)
@@ -869,29 +871,30 @@ Wait for the completion notification. Do not poll.
 
 Confirm all of the following. If any fails, stop and report rather than re-running with changed settings:
 - The log ends with the PHASE 2 block.
-- The budget values are non-zero.
-- At least one phase-1 row is feasible.
+- The quadgram reference line is present.
+- Note any `grid edge` warnings: a best delta at the edge of `DELTAS` means the grid should be widened.
 
 - [ ] **Step 3: Write the results section in `evaluation/EXPERIMENTS.md`**
 
-Add a section `## Char-GRU tuning by FN at an FP budget — measured (2026-10-09)` containing:
+Add a section `## Char-GRU tuning by weighted cost (10·FP + FN) — measured (2026-10-09)` containing:
 - **Setup:**
   - `--lang en --coarse-to-fine`: EN hyperparameters searched, HE GRU at the baseline.
   - About 1M training words per language, every 5th line held out.
-  - 2 seeds, the budget values, the delta grid.
+  - 2 seeds, w = 10, the delta grid, the quadgram reference row.
 - **Phase-1 winner vs the baseline row:** hyperparameters, chosen Δ, FP, FN, latency.
 - **Comparison table:** the 4 rows from `comparison` with floor, margin, Δ, FP/FN per language, FN sum, median latency.
 - **Validation-loss check:** one sentence on whether phase-1 order by EN validation loss matched order by objective A. Compute it from the JSON.
 - **Caveats:**
   - Phase 2 tuned the knobs on the phase-1 winner only.
   - One split, not k-fold.
-  - Infeasible rows, if any.
+  - Grid-edge warnings, if any.
+  - Why the objective changed from FN-at-budget: the aborted first run (archived log) showed scores set by Δ bucket, not model quality.
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add evaluation/tune_char_gru_en.json evaluation/tune_char_gru_en.log evaluation/EXPERIMENTS.md
-git commit -m "docs(evaluation): EN Char-GRU tuning by FN at FP budget, floor/fast-switch ablations
+git commit -m "docs(evaluation): EN Char-GRU tuning by weighted cost, floor/fast-switch ablations
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -903,3 +906,211 @@ Report:
 - The winning hyperparameters, floor and margin, as a proposal for `GRU_HPARAMS`, `UNIGRAM_FLOOR` and `FAST_SWITCH_MARGIN`. Do not apply them.
 - If the EN winner differs from `BASELINE_PARAMS`, `GRU_HPARAMS` needs splitting per language before shipping. Flag it; don't build it.
 - That shipping needs a retrain with `scripts/train_char_gru.py`, because the shipped GRU has no unigram table, so the floor is a no-op in the app today.
+
+---
+
+### Task 6: Weighted-cost objective and GPU/CPU overlap
+
+Two changes to `scripts/tune_char_gru.py`, decided after the first run was stopped.
+
+1. **Objective: weighted cost instead of FN at an FP budget.** With the budget, a config's score jumped by about 0.4 FN/1k depending on whether its FP landed just under or just over the budget at Δ7.5. The margin was less than one FP event. The new score for a GRU pair at one delta is `W_FP · (FP_en + FP_he) + (FN_en + FN_he)`, all per 1k words, with `W_FP = 10`: a wrong switch costs as much as ten missed ones. The tuner evaluates every delta in `DELTAS` and keeps the delta with the lowest cost. Every config gets a score, so nothing is infeasible. Interpolating between grid deltas is pointless here: the minimum of a piecewise-linear curve is always at a grid point.
+2. **Overlap.** Phase 1 trains the next candidate on the GPU in a background thread while the CPU worker pool scores the current one.
+
+The quadgram FP budget goes away. In its place, the quadgram pair is scored with the same weighted cost and reported as a reference row.
+
+**Files:**
+- Modify: `scripts/tune_char_gru.py`
+- Modify: `tests/test_tune_char_gru.py`
+
+**Interfaces:**
+- Produces: `weighted_cost(fp_at, fn_at, deltas=DELTAS, w=W_FP) -> {'delta', 'fp': {lang}, 'fn': {lang}, 'med': {lang}, 'score'}`. It replaces `fn_at_budget` and never returns None.
+- Produces: `score(pairs, split, floor, margin, data_dir, jobs, model_type='neural')`.
+- Produces: `split['reference']` (the quadgram's weighted-cost result) replaces `split['budget']`. The JSON key `budget` becomes `reference`, and a key `w_fp` is added.
+- Unchanged: `rank_key`, `best`, `ablations`, `phase2`, CLI flags.
+
+- [ ] **Step 1: Write the failing tests.** In `tests/test_tune_char_gru.py`:
+  - Change the module docstring to `test_tune_char_gru.py — weighted-cost objective, phase-1 training overlap, ablation pick, coarse-to-fine grids.`
+  - Replace `fn_at_budget` with `weighted_cost` in the import line, and add `import threading`, `from unittest import mock` and `import scripts.tune_char_gru as tune`.
+  - Delete `BUDGET`, `_fn` and the class `TestObjective`.
+  - Add:
+
+```python
+FPS = {6.0: {'en': 0.30, 'he': 0.02}, 7.5: {'en': 0.10, 'he': 0.01}, 9.0: {'en': 0.05, 'he': 0.0}}
+
+
+def _fn(delta):
+    return {'en': {'fn': delta / 10, 'med': 5.0}, 'he': {'fn': delta / 20, 'med': 4.0}}
+
+
+class TestWeightedCost(unittest.TestCase):
+
+    def test_picks_delta_with_lowest_weighted_cost(self):
+        # w=10 costs: Δ6 4.1, Δ7.5 2.225, Δ9 1.85
+        res = weighted_cost(FPS.__getitem__, _fn, deltas=(9.0, 6.0, 7.5), w=10)
+        self.assertEqual(res['delta'], 9.0)
+        self.assertAlmostEqual(res['score'], 1.85)
+        self.assertEqual(res['fp'], FPS[9.0])
+        self.assertEqual(res['fn'], {'en': 0.9, 'he': 0.45})
+        self.assertEqual(res['med'], {'en': 5.0, 'he': 4.0})
+
+    def test_weight_moves_the_choice(self):
+        # w=1 costs: Δ6 1.22, Δ7.5 1.235, Δ9 1.40
+        self.assertEqual(weighted_cost(FPS.__getitem__, _fn, deltas=(6.0, 7.5, 9.0), w=1)['delta'], 6.0)
+
+
+class TestPhase1Overlap(unittest.TestCase):
+
+    def test_trains_off_main_thread_and_keeps_rows_aligned(self):
+        on_main = []
+
+        def fake_train_pair(hp, searched, split, seed, work_dir, memo):
+            on_main.append(threading.current_thread() is threading.main_thread())
+            return {'en_model_path': f"m{hp['emb_dim']}_{seed}"}, {'en': float(hp['emb_dim'])}
+
+        def fake_score(pairs, split, floor, margin, data_dir, jobs):
+            s = -float(pairs[0]['en_model_path'][1:].split('_')[0])   # bigger emb_dim = better
+            zero = {'en': 0.0, 'he': 0.0}
+            return {'delta': 6.0, 'fp': zero, 'fn': zero, 'med': zero, 'score': s}
+
+        cands = [{**BASELINE_PARAMS, 'emb_dim': e} for e in (8, 16, 24)]
+        with mock.patch.object(tune, 'train_pair', fake_train_pair), mock.patch.object(tune, 'score', fake_score):
+            rows = tune.phase1(cands, 'test', ('en',), {}, [0, 1], 'data', 1, 'work', {})
+
+        self.assertEqual(len(on_main), 6)
+        self.assertFalse(any(on_main))
+        self.assertEqual([r['params']['emb_dim'] for r in rows], [24, 16, 8])
+        self.assertEqual(rows[2]['pairs'], [{'en_model_path': 'm8_0'}, {'en_model_path': 'm8_1'}])
+        self.assertEqual(rows[2]['val_loss'], {'en': 8.0})
+```
+
+Run: `$PY -m pytest tests/test_tune_char_gru.py -q`
+Expected: FAIL with `ImportError: cannot import name 'weighted_cost'`.
+
+- [ ] **Step 2: Replace the objective.** In `scripts/tune_char_gru.py`:
+  - Delete `BUDGET_DELTA`. Set `DELTAS = (6.0, 7.5, 9.0, 10.5, 12.0, 13.5)`. The aborted run showed EN GRU FP of about 0.8/1k at Δ4.5, so with w=10 that end can't win.
+  - Add `W_FP = 10   # a wrong switch costs as much as ten missed ones`.
+  - Replace `fn_at_budget` with:
+
+```python
+def weighted_cost(fp_at, fn_at, deltas=DELTAS, w=W_FP):
+    """Lowest w·FP + FN (each summed over languages, per 1k words) across *deltas*.
+
+    fp_at(delta) -> {lang: FP/1k}; fn_at(delta) -> {lang: {'fn': FN/1k, 'med': median latency}}.
+    Returns the result at the cheapest delta.
+    """
+    best_res = None
+    for d in sorted(deltas):
+        fp, fn = fp_at(d), fn_at(d)
+        cost = w * sum(fp.values()) + sum(v['fn'] for v in fn.values())
+        if best_res is None or cost < best_res['score']:
+            best_res = {'delta': d, 'fp': fp,
+                        'fn': {lang: v['fn'] for lang, v in fn.items()},
+                        'med': {lang: v['med'] for lang, v in fn.items()},
+                        'score': cost}
+    return best_res
+```
+
+  - In `rank_key`, change the docstring to `"""Rows by score; rows without a result (e.g. an empty ablation) last."""`. The code stays.
+
+- [ ] **Step 3: Score with it, and make the quadgram a reference row.**
+  - `score(pairs, split, floor, margin, data_dir, jobs, model_type='neural')`:
+    - Pass `model_type=model_type` to `run_test` instead of the literal `'neural'`.
+    - Return `weighted_cost(fp_at, fn_at)`.
+    - Before returning, warn if the best delta sits on the grid edge:
+
+```python
+    res = weighted_cost(fp_at, fn_at)
+    if res['delta'] in (min(DELTAS), max(DELTAS)):
+        logger.warning("best delta %g is at the edge of DELTAS %s; widen the grid", res['delta'], DELTAS)
+    return res
+```
+
+  - `prepare_split`:
+    - Change the docstring to `"""Hold out every K-th line per language and build quadgrams on the rest; score them as the reference."""`.
+    - Replace the `split['budget']` block and its log line with:
+
+```python
+    # Reference: the quadgram pair (fast switch off, as it ships) under the same weighted cost.
+    split['reference'] = score([split['quad']], split, 0.0, math.inf, data_dir, jobs, model_type='quadgram')
+    logger.info("Quadgram reference: %s", _fmt(split['reference']))
+```
+
+  - `_fmt`:
+    - Return `"n/a"` for None.
+    - Change `sum {res['score']:.3f}` to `cost {res['score']:.3f}`.
+  - `print_report(reference, searched, p1, comparison)`:
+    - Print first `f"\nQuadgram reference (fast switch off), cost = {W_FP}·FP + FN per 1k words: {_fmt(reference)}"`.
+    - Then the existing phase-1 and phase-2 blocks, unchanged.
+  - `main`:
+    - Change the description to `"Tune Char-GRU hyperparameters by weighted cost (W_FP·FP + FN)"`.
+    - Pass `split['reference']` to `print_report`.
+    - In the JSON, replace `'budget': split['budget']` with `'reference': split['reference'], 'w_fp': W_FP`.
+    - Change the `--out` help to `"Write reference, both phases and the comparison to this JSON file"`.
+  - Rewrite the module docstring's first paragraph:
+
+```
+Objective: an EN+HE GRU pair is scored by weighted cost, W_FP·(FP_en + FP_he) + (FN_en + FN_he),
+per 1k words, with W_FP = 10. Every delta in DELTAS is evaluated and the cheapest one is kept.
+The quadgram pair (fast switch off, as it ships) is scored the same way as a reference row.
+Validation loss is reported, not ranked on.
+```
+
+- [ ] **Step 4: Overlap training with scoring in `phase1`.**
+  - Add `from concurrent.futures import ThreadPoolExecutor` to the imports.
+  - Replace `phase1` with:
+
+```python
+def phase1(candidates, desc, searched, split, seeds, data_dir, jobs, work_dir, memo):
+    """Score training-hyperparameter *candidates* at the current floor and margin, best first.
+
+    The next candidate trains on the GPU in a background thread while the CPU pool scores this one.
+    """
+    def train_all(hp):
+        return [train_pair(hp, searched, split, s, work_dir, memo) for s in seeds]
+
+    rows = []
+    # ponytail: trains one candidate ahead; a deeper queue only helps if training outlasts scoring
+    with ThreadPoolExecutor(max_workers=1) as trainer:
+        pending = trainer.submit(train_all, candidates[0])
+        for i, hp in enumerate(tqdm(candidates, desc=desc, unit='config')):
+            trained = pending.result()
+            if i + 1 < len(candidates):
+                pending = trainer.submit(train_all, candidates[i + 1])
+            pairs = [p for p, _ in trained]
+            rows.append({'params': hp, 'is_baseline': hp == BASELINE_PARAMS, 'pairs': pairs,
+                         'val_loss': {lang: statistics.mean(v[lang] for _, v in trained) for lang in searched},
+                         'result': score(pairs, split, UNIGRAM_FLOOR, FAST_SWITCH_MARGIN, data_dir, jobs)})
+            logger.info("%s %d/%d %s -> %s", desc, i + 1, len(candidates), hp, _fmt(rows[-1]['result']))
+    return sorted(rows, key=rank_key)
+```
+
+  `memo` is only touched by the trainer thread during phase 1, so it needs no lock.
+
+- [ ] **Step 5: Run the tests**
+
+Run: `$PY -m pytest tests -q`
+Expected: no failures. `tests/test_tune_char_gru.py` has 7 tests.
+
+Run: `grep -n "budget\|BUDGET\|fn_at_budget\|infeasible" scripts/tune_char_gru.py tests/test_tune_char_gru.py`
+Expected: no output.
+
+- [ ] **Step 6: Smoke run**
+
+Run: `$PY scripts/tune_char_gru.py --lang en --max-lines 3000 --train-words 40000 --trials 3 --seeds 0 --out "$SCRATCH/tune_smoke.json"`
+Expected:
+- Exit 0.
+- A `Quadgram reference:` log line and the reference line in the report.
+- 3 phase-1 rows, each with a `cost` value.
+- 4 phase-2 rows.
+- JSON keys `lang, mode, reference, w_fp, seeds, phase1, phase2, comparison`.
+
+Also compare the timestamps of the `Training en CharGRU` log lines with the `phase 1 N/3` result lines: training for candidate N+1 should start before candidate N's result line. Report the wall time.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add scripts/tune_char_gru.py tests/test_tune_char_gru.py
+git commit -m "feat(tuning): weighted-cost objective (10·FP + FN); overlap GPU training with CPU scoring
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
