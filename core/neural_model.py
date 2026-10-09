@@ -12,6 +12,10 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# Weight of the unigram fallback in P = (1 - λ)·P_gru + λ·P_unigram; bounds the cost of any
+# single character the way add-1 smoothing does for the quadgram. Not tuned yet.
+UNIGRAM_FLOOR = 0.05
+
 
 def _sigmoid(x):
     """Numerically stable sigmoid."""
@@ -29,7 +33,7 @@ def _log_softmax(x):
 class CharNeuralModel:
     """Character-level neural language model backed by a 1-layer GRU in pure NumPy."""
 
-    def __init__(self, model_path):
+    def __init__(self, model_path, floor=UNIGRAM_FLOOR):
         """Load CharGRU weights and metadata.
         
         Args:
@@ -57,6 +61,10 @@ class CharNeuralModel:
         self.char_to_idx = self.meta['char_to_idx']
         self.unk_idx = self.meta.get('unk_idx', 1)
         self.pad_idx = self.meta.get('pad_idx', 0)
+        # Models trained before the unigram table was saved score without a floor.
+        unigram = self.meta.get('unigram')
+        self._floor = None if unigram is None or not floor else floor * np.asarray(unigram)
+        self._keep = 1.0 - floor
 
         # Load NumPy weights
         weights = np.load(model_path)
@@ -89,6 +97,13 @@ class CharNeuralModel:
         # Initial hidden state (all zeros)
         self._initial_h = np.zeros(H, dtype=np.float32)
 
+    def _next_log_probs(self, logits):
+        """Log P(next char), mixed with the unigram fallback when the model carries one."""
+        log_probs = _log_softmax(logits)
+        if self._floor is None:
+            return log_probs
+        return np.log(self._keep * np.exp(log_probs) + self._floor)
+
     def init_state(self):
         """Return a fresh initial hidden state vector."""
         return self._initial_h.copy()
@@ -115,7 +130,7 @@ class CharNeuralModel:
 
         # Linear projection to vocabulary
         logits = self.weight_fc @ h_next + self.bias_fc
-        log_probs = _log_softmax(logits)
+        log_probs = self._next_log_probs(logits)
         return log_probs, h_next
 
     def score(self, text):
@@ -149,7 +164,7 @@ class CharNeuralModel:
             h = (1.0 - z) * n + z * h
 
             logits = self.weight_fc @ h + self.bias_fc
-            log_probs = _log_softmax(logits)
+            log_probs = self._next_log_probs(logits)
             total_log_prob += float(log_probs[next_id])
 
         return total_log_prob

@@ -32,9 +32,13 @@ if torch.version.hip:
     # MIOpen's fused GRU backward fails there (miopenStatusUnknownError); native kernels work.
     torch.backends.cudnn.enabled = False
 
-# Character vocabularies
-EN_CHARS = list(" abcdefghijklmnopqrstuvwxyz0123456789-.,'\"!?")
-HE_CHARS = list(" אבגדהוזחטיכלמנסעפצקרשתךםןףץ0123456789-.,'\"!?")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from scripts.build_quadgrams import ALLOWED_EN, ALLOWED_HE
+
+# Character vocabularies: the same keyboard-typeable sets the quadgram counts. Sorted so
+# char_to_idx is stable across runs (set order of str varies with hash randomization).
+EN_CHARS = sorted(ALLOWED_EN)
+HE_CHARS = sorted(ALLOWED_HE)
 
 
 class CharGRU(nn.Module):
@@ -72,7 +76,7 @@ class CharGRU(nn.Module):
 class WordDataset(Dataset):
     """Dataset of padded character sequences for language modeling."""
 
-    def __init__(self, words, char_to_idx, max_len=16):
+    def __init__(self, words, char_to_idx, max_len=14):
         self.samples = []
         unk_idx = char_to_idx.get('<unk>', 1)
         
@@ -117,7 +121,7 @@ def load_words_from_corpus(corpus_path, max_words=500_000, allowed_chars=None):
             if not line:
                 continue
             for w in line.split():
-                if len(w) < 2 or len(w) > 14:
+                if len(w) > 12:  # same cap as build_quadgrams
                     continue
                 if any('\u0591' <= ch <= '\u05C7' for ch in w):
                     continue
@@ -134,8 +138,10 @@ def load_words_from_corpus(corpus_path, max_words=500_000, allowed_chars=None):
 
 
 def train_model(words, lang='en', emb_dim=32, hidden_dim=128, epochs=5, batch_size=512, lr=0.008,
-                dropout=0.1, weight_decay=1e-4, val_words=None, device=None):
+                dropout=0.1, weight_decay=1e-4, val_words=None, device=None, seed=0):
     """Train the CharGRU model and return (model, vocab_info)."""
+    # Fixed seed: unseeded runs on identical data differed up to 11x in benchmark FP rate.
+    torch.manual_seed(seed)
     raw_chars = EN_CHARS if lang == 'en' else HE_CHARS
     
     # Vocabulary: 0 = <pad>, 1 = <unk>, followed by characters
@@ -213,6 +219,15 @@ def train_model(words, lang='en', emb_dim=32, hidden_dim=128, epochs=5, batch_si
         model.load_state_dict(best_state)
 
     model.eval()
+    # Add-1 frequency of every next-character target (word chars and the closing space), the
+    # fallback distribution CharNeuralModel mixes in so no character's probability reaches zero.
+    unigram = np.ones(vocab_size)
+    unigram[0] = 0.0
+    for w in words:
+        for ch in w.strip() + ' ':
+            unigram[char_to_idx.get(ch, 1)] += 1
+    unigram /= unigram.sum()
+
     vocab_info = {
         'lang': lang,
         'vocab_size': vocab_size,
@@ -225,6 +240,7 @@ def train_model(words, lang='en', emb_dim=32, hidden_dim=128, epochs=5, batch_si
         'idx_to_char': idx_to_char,
         'pad_idx': 0,
         'unk_idx': 1,
+        'unigram': unigram.tolist(),
         'train_loss': final_train_loss,
         # None when nothing was held out: the training loss is not a validation score.
         'val_loss': best_val_loss if val_loader else None,

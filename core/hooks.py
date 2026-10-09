@@ -19,6 +19,7 @@ import logging
 import threading
 import time
 
+from core.engine import FAST_SWITCH_MARGIN
 from core.keymap import get_both_chars, vk_to_char
 from core.switcher import execute_switch, get_current_layout, GUITHREADINFO
 
@@ -584,8 +585,8 @@ class HookManager:
 
             if should_switch:
                 self._consecutive_midword_hits += 1
-                is_neural = getattr(self.engine, 'model_type', 'quadgram') == 'neural'
-                effective_k = 1 if (is_neural and diff + self._evidence() > self.sensitivity.delta + 2.5) else 2
+                decisive = diff + self._evidence() > self.sensitivity.delta + FAST_SWITCH_MARGIN
+                effective_k = 1 if decisive else 2
                 if self._consecutive_midword_hits >= effective_k:
                     is_caps_fix = (current == 'he' and caps_lock)
                     if self._trigger_switch(caps_fix=is_caps_fix):

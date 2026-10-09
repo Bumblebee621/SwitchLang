@@ -15,6 +15,10 @@ from collections import deque
 
 logger = logging.getLogger(__name__)
 
+# Mid-word evidence this far past delta switches on one keystroke instead of waiting for a
+# second confirmation. Not tuned yet; evaluation/benchmark.py --fast-margin sweeps it.
+FAST_SWITCH_MARGIN = 3.5
+
 
 class EvaluationEngine:
     """Evaluates whether a layout switch should occur."""
