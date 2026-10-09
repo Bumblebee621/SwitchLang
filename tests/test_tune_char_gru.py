@@ -1,41 +1,65 @@
 """
-test_tune_char_gru.py — objective A (FN at an FP budget) and the ablation pick.
+test_tune_char_gru.py — weighted-cost objective, phase-1 training overlap, ablation pick, coarse-to-fine grids.
 """
 
 import math
 import os
 import sys
+import threading
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from scripts.tune_char_gru import BASELINE_PARAMS, ablations, best, coarse_candidates, fine_candidates, fn_at_budget
+import scripts.tune_char_gru as tune
+from scripts.tune_char_gru import BASELINE_PARAMS, ablations, best, coarse_candidates, fine_candidates, weighted_cost
 
-BUDGET = {'en': 0.10, 'he': 0.02}
+FPS = {6.0: {'en': 0.30, 'he': 0.02}, 7.5: {'en': 0.10, 'he': 0.01}, 9.0: {'en': 0.05, 'he': 0.0}}
 
 
 def _fn(delta):
     return {'en': {'fn': delta / 10, 'med': 5.0}, 'he': {'fn': delta / 20, 'med': 4.0}}
 
 
-class TestObjective(unittest.TestCase):
+class TestWeightedCost(unittest.TestCase):
 
-    def test_first_delta_within_budget_in_both_languages(self):
-        fps = {4.5: {'en': 0.3, 'he': 0.01}, 6.0: {'en': 0.08, 'he': 0.03}, 7.5: {'en': 0.05, 'he': 0.02}}
-        fn_calls = []
-
-        def fn_at(d):
-            fn_calls.append(d)
-            return _fn(d)
-
-        res = fn_at_budget(fps.__getitem__, fn_at, BUDGET, deltas=(7.5, 4.5, 6.0))
-        self.assertEqual(res['delta'], 7.5)          # 6.0 fails HE, 4.5 fails EN
-        self.assertEqual(fn_calls, [7.5])            # FN only measured at the chosen delta
-        self.assertAlmostEqual(res['score'], 0.75 + 0.375)
+    def test_picks_delta_with_lowest_weighted_cost(self):
+        # w=10 costs: Δ6 4.1, Δ7.5 2.225, Δ9 1.85
+        res = weighted_cost(FPS.__getitem__, _fn, deltas=(9.0, 6.0, 7.5), w=10)
+        self.assertEqual(res['delta'], 9.0)
+        self.assertAlmostEqual(res['score'], 1.85)
+        self.assertEqual(res['fp'], FPS[9.0])
+        self.assertEqual(res['fn'], {'en': 0.9, 'he': 0.45})
         self.assertEqual(res['med'], {'en': 5.0, 'he': 4.0})
 
-    def test_none_when_budget_never_met(self):
-        self.assertIsNone(fn_at_budget(lambda d: {'en': 1.0, 'he': 1.0}, _fn, BUDGET, deltas=(6.0, 9.0)))
+    def test_weight_moves_the_choice(self):
+        # w=1 costs: Δ6 1.22, Δ7.5 1.235, Δ9 1.40
+        self.assertEqual(weighted_cost(FPS.__getitem__, _fn, deltas=(6.0, 7.5, 9.0), w=1)['delta'], 6.0)
+
+
+class TestPhase1Overlap(unittest.TestCase):
+
+    def test_trains_off_main_thread_and_keeps_rows_aligned(self):
+        on_main = []
+
+        def fake_train_pair(hp, searched, split, seed, work_dir, memo):
+            on_main.append(threading.current_thread() is threading.main_thread())
+            return {'en_model_path': f"m{hp['emb_dim']}_{seed}"}, {'en': float(hp['emb_dim'])}
+
+        def fake_score(pairs, split, floor, margin, data_dir, jobs):
+            s = -float(pairs[0]['en_model_path'][1:].split('_')[0])   # bigger emb_dim = better
+            zero = {'en': 0.0, 'he': 0.0}
+            return {'delta': 6.0, 'fp': zero, 'fn': zero, 'med': zero, 'score': s}
+
+        cands = [{**BASELINE_PARAMS, 'emb_dim': e} for e in (8, 16, 24)]
+        with mock.patch.object(tune, 'train_pair', fake_train_pair), mock.patch.object(tune, 'score', fake_score):
+            rows = tune.phase1(cands, 'test', ('en',), {}, [0, 1], 'data', 1, 'work', {})
+
+        self.assertEqual(len(on_main), 6)
+        self.assertFalse(any(on_main))
+        self.assertEqual([r['params']['emb_dim'] for r in rows], [24, 16, 8])
+        self.assertEqual(rows[2]['pairs'], [{'en_model_path': 'm8_0'}, {'en_model_path': 'm8_1'}])
+        self.assertEqual(rows[2]['val_loss'], {'en': 8.0})
 
 
 class TestAblations(unittest.TestCase):
@@ -50,9 +74,9 @@ class TestAblations(unittest.TestCase):
         self.assertEqual(picked['tuned'], rows[0])
         self.assertEqual(picked['no floor, fast switch'], rows[2])
         self.assertEqual(picked['floor, no fast switch'], rows[3])
-        self.assertEqual(picked['neither'], rows[4])   # infeasible, still reported
+        self.assertEqual(picked['neither'], rows[4])   # empty ablation, still reported
 
-    def test_best_ranks_infeasible_last(self):
+    def test_best_ranks_missing_result_last(self):
         rows = [self._row(0.0, 2.5, None), self._row(0.0, 3.5, 9.0)]
         self.assertEqual(best(rows), rows[1])
 

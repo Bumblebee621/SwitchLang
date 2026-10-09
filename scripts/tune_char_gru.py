@@ -1,11 +1,10 @@
 """
 tune_char_gru.py — Char-GRU hyperparameter search ranked by switching quality.
 
-Objective A: an EN+HE GRU pair is scored by FN at an FP budget. Delta is swept upward; at
-the first delta where every language's FP/1k is within budget, the score is the sum of the
-two languages' FN/1k there. The budget is the quadgram's FP/1k at Δ6.0 with no fast switch
-(the shipped quadgram behaviour) on the same held-out lines. A pair that never meets the
-budget is infeasible and ranks last. Validation loss is reported, not ranked on.
+Objective: an EN+HE GRU pair is scored by weighted cost, W_FP·(FP_en + FP_he) + (FN_en + FN_he),
+per 1k words, with W_FP = 10. Every delta in DELTAS is evaluated and the cheapest one is kept.
+The quadgram pair (fast switch off, as it ships) is scored the same way as a reference row.
+Validation loss is reported, not ranked on.
 
 --lang picks whose GRU takes the candidate hyperparameters; the other language trains with
 BASELINE_PARAMS. Both languages are always scored: the app has one delta for both.
@@ -31,6 +30,7 @@ import shutil
 import statistics
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
@@ -53,33 +53,32 @@ K = 5   # held-out test = every K-th line, as fold 1 of kfold_cv
 BASELINE_PARAMS = {k: v for k, v in GRU_HPARAMS.items() if k != 'epochs'}
 
 LANGS = ('en', 'he')
-BUDGET_DELTA = 6.0                                   # shipped baseline_delta
-DELTAS = (4.5, 6.0, 7.5, 9.0, 10.5, 12.0, 13.5, 15.0)
+DELTAS = (6.0, 7.5, 9.0, 10.5, 12.0, 13.5)
+W_FP = 10   # a wrong switch costs as much as ten missed ones
 FLOORS = (0.0, 0.02, 0.05, 0.1)
 MARGINS = (math.inf, 2.5, 3.5, 5.0)                  # inf = fast switch off
 
 
-def fn_at_budget(fp_at, fn_at, budget, deltas=DELTAS):
-    """Objective A: summed FN/1k at the smallest delta whose FP/1k is within *budget* in every language.
+def weighted_cost(fp_at, fn_at, deltas=DELTAS, w=W_FP):
+    """Lowest w·FP + FN (each summed over languages, per 1k words) across *deltas*.
 
     fp_at(delta) -> {lang: FP/1k}; fn_at(delta) -> {lang: {'fn': FN/1k, 'med': median latency}}.
-    Returns None when no delta qualifies (infeasible).
+    Returns the result at the cheapest delta.
     """
-    # ponytail: stops at the first passing delta, assuming FP falls and FN rises with delta;
-    # sweep every delta and take the min FN if a run ever shows otherwise.
+    best_res = None
     for d in sorted(deltas):
-        fp = fp_at(d)
-        if all(fp[lang] <= budget[lang] for lang in budget):
-            fn = fn_at(d)
-            return {'delta': d, 'fp': fp,
-                    'fn': {lang: v['fn'] for lang, v in fn.items()},
-                    'med': {lang: v['med'] for lang, v in fn.items()},
-                    'score': sum(v['fn'] for v in fn.values())}
-    return None
+        fp, fn = fp_at(d), fn_at(d)
+        cost = w * sum(fp.values()) + sum(v['fn'] for v in fn.values())
+        if best_res is None or cost < best_res['score']:
+            best_res = {'delta': d, 'fp': fp,
+                        'fn': {lang: v['fn'] for lang, v in fn.items()},
+                        'med': {lang: v['med'] for lang, v in fn.items()},
+                        'score': cost}
+    return best_res
 
 
 def rank_key(row):
-    """Feasible rows by score, infeasible rows last."""
+    """Rows by score; rows without a result (e.g. an empty ablation) last."""
     return (row['result'] is None, row['result']['score'] if row['result'] else 0.0)
 
 
@@ -152,7 +151,7 @@ def fine_candidates(arch):
 
 
 def prepare_split(data_dir, max_lines, train_words, jobs, work_dir):
-    """Hold out every K-th line per language, build quadgrams on the rest, measure the FP budget."""
+    """Hold out every K-th line per language and build quadgrams on the rest; score them as the reference."""
     split = {'test': {}, 'words': {}, 'quad': {}}
     for lang in LANGS:
         lines = load_pool(lang, data_dir, K, max_lines, train_words)
@@ -163,12 +162,9 @@ def prepare_split(data_dir, max_lines, train_words, jobs, work_dir):
         counts = build_quadgrams_from_lines(train, ALLOWED[lang], min_count=2, num_workers=jobs)
         save_model_data_to_trie(counts, f'{base}.marisa', f'{base}.meta.json')
         split['quad'][f'{lang}_model_path'] = f'{base}.marisa'
-    split['budget'] = {
-        lang: run_test('fp', split['test'][lang], lang, BUDGET_DELTA, data_dir, jobs=jobs,
-                       model_type='quadgram', fast_margin=math.inf, **split['quad']).fp_per_1k
-        for lang in LANGS
-    }
-    logger.info("FP budget (quadgram, Δ%g, no fast switch): %s", BUDGET_DELTA, split['budget'])
+    # Reference: the quadgram pair (fast switch off, as it ships) under the same weighted cost.
+    split['reference'] = score([split['quad']], split, 0.0, math.inf, data_dir, jobs, model_type='quadgram')
+    logger.info("Quadgram reference: %s", _fmt(split['reference']))
     return split
 
 
@@ -197,11 +193,11 @@ def train_pair(hp, searched, split, seed, work_dir, memo):
     return paths, val
 
 
-def score(pairs, split, floor, margin, data_dir, jobs):
-    """Objective A for one floor/margin, FP and FN averaged over the seed model *pairs*."""
+def score(pairs, split, floor, margin, data_dir, jobs, model_type='neural'):
+    """Weighted cost for one floor/margin, FP and FN averaged over the seed model *pairs*."""
     def run(test, lang, delta):
         return [run_test(test, split['test'][lang], lang, delta, data_dir, jobs=jobs,
-                         model_type='neural', floor=floor, fast_margin=margin, **p) for p in pairs]
+                         model_type=model_type, floor=floor, fast_margin=margin, **p) for p in pairs]
 
     def fp_at(delta):
         return {lang: statistics.mean(r.fp_per_1k for r in run('fp', lang, delta)) for lang in LANGS}
@@ -215,19 +211,33 @@ def score(pairs, split, floor, margin, data_dir, jobs):
                                                 for r in reports)}
         return out
 
-    return fn_at_budget(fp_at, fn_at, split['budget'])
+    res = weighted_cost(fp_at, fn_at)
+    if res['delta'] in (min(DELTAS), max(DELTAS)):
+        logger.warning("best delta %g is at the edge of DELTAS %s; widen the grid", res['delta'], DELTAS)
+    return res
 
 
 def phase1(candidates, desc, searched, split, seeds, data_dir, jobs, work_dir, memo):
-    """Score training-hyperparameter *candidates* at the current floor and margin, best first."""
+    """Score training-hyperparameter *candidates* at the current floor and margin, best first.
+
+    The next candidate trains on the GPU in a background thread while the CPU pool scores this one.
+    """
+    def train_all(hp):
+        return [train_pair(hp, searched, split, s, work_dir, memo) for s in seeds]
+
     rows = []
-    for i, hp in enumerate(tqdm(candidates, desc=desc, unit='config')):
-        trained = [train_pair(hp, searched, split, s, work_dir, memo) for s in seeds]
-        pairs = [p for p, _ in trained]
-        rows.append({'params': hp, 'is_baseline': hp == BASELINE_PARAMS, 'pairs': pairs,
-                     'val_loss': {lang: statistics.mean(v[lang] for _, v in trained) for lang in searched},
-                     'result': score(pairs, split, UNIGRAM_FLOOR, FAST_SWITCH_MARGIN, data_dir, jobs)})
-        logger.info("%s %d/%d %s -> %s", desc, i + 1, len(candidates), hp, _fmt(rows[-1]['result']))
+    # ponytail: trains one candidate ahead; a deeper queue only helps if training outlasts scoring
+    with ThreadPoolExecutor(max_workers=1) as trainer:
+        pending = trainer.submit(train_all, candidates[0])
+        for i, hp in enumerate(tqdm(candidates, desc=desc, unit='config')):
+            trained = pending.result()
+            if i + 1 < len(candidates):
+                pending = trainer.submit(train_all, candidates[i + 1])
+            pairs = [p for p, _ in trained]
+            rows.append({'params': hp, 'is_baseline': hp == BASELINE_PARAMS, 'pairs': pairs,
+                         'val_loss': {lang: statistics.mean(v[lang] for _, v in trained) for lang in searched},
+                         'result': score(pairs, split, UNIGRAM_FLOOR, FAST_SWITCH_MARGIN, data_dir, jobs)})
+            logger.info("%s %d/%d %s -> %s", desc, i + 1, len(candidates), hp, _fmt(rows[-1]['result']))
     return sorted(rows, key=rank_key)
 
 
@@ -240,15 +250,14 @@ def phase2(pairs, split, data_dir, jobs):
 
 def _fmt(res):
     if res is None:
-        return "infeasible (no delta meets the FP budget)"
+        return "n/a"
     return (f"Δ{res['delta']:<5g} FP en {res['fp']['en']:.3f} he {res['fp']['he']:.3f} | "
-            f"FN en {res['fn']['en']:.3f} he {res['fn']['he']:.3f} sum {res['score']:.3f} | "
+            f"FN en {res['fn']['en']:.3f} he {res['fn']['he']:.3f} cost {res['score']:.3f} | "
             f"med lat en {res['med']['en']:.1f} he {res['med']['he']:.1f}")
 
 
-def print_report(budget, searched, p1, comparison):
-    print(f"\nFP budget per 1k words (quadgram, Δ{BUDGET_DELTA:g}, no fast switch): "
-          f"en {budget['en']:.3f}  he {budget['he']:.3f}")
+def print_report(reference, searched, p1, comparison):
+    print(f"\nQuadgram reference (fast switch off), cost = {W_FP}·FP + FN per 1k words: {_fmt(reference)}")
     print(f"\nPHASE 1 — training hyperparameters of {'+'.join(searched)} "
           f"(floor {UNIGRAM_FLOOR:g}, margin {FAST_SWITCH_MARGIN:g}), best first")
     for r in p1:
@@ -264,7 +273,7 @@ def print_report(budget, searched, p1, comparison):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Tune Char-GRU hyperparameters by FN at an FP budget")
+    parser = argparse.ArgumentParser(description="Tune Char-GRU hyperparameters by weighted cost (W_FP·FP + FN)")
     parser.add_argument('--lang', choices=['en', 'he', 'both'], default='both',
                         help="Whose GRU takes the candidate hyperparameters; the other uses the baseline. "
                              "Both languages are always scored (default: both)")
@@ -278,7 +287,7 @@ def main():
     parser.add_argument('--seeds', type=int, nargs='+', default=[0, 1], help="Training seeds per candidate (default: 0 1)")
     parser.add_argument('--sample-seed', type=int, default=42, help="Seed for drawing random candidates (default: 42)")
     parser.add_argument('-j', '--jobs', type=int, default=os.cpu_count() or 4, help="Evaluation worker processes")
-    parser.add_argument('--out', default=None, help="Write budget, both phases and the comparison to this JSON file")
+    parser.add_argument('--out', default=None, help="Write reference, both phases and the comparison to this JSON file")
     args = parser.parse_args()
 
     data_dir = os.path.abspath(args.data_dir)
@@ -299,11 +308,11 @@ def main():
                 p1 = run(generate_candidates(args.trials, args.sample_seed), 'phase 1')
             p2 = phase2(p1[0]['pairs'], split, data_dir, args.jobs)
         comparison = ablations(p2)
-        print_report(split['budget'], searched, p1, comparison)
+        print_report(split['reference'], searched, p1, comparison)
         if args.out:
             with open(args.out, 'w', encoding='utf-8') as fh:
                 json.dump({'lang': args.lang, 'mode': 'coarse-to-fine' if args.coarse_to_fine else 'random',
-                           'budget': split['budget'], 'seeds': args.seeds,
+                           'reference': split['reference'], 'w_fp': W_FP, 'seeds': args.seeds,
                            'phase1': [{k: v for k, v in r.items() if k != 'pairs'} for r in p1],
                            'phase2': p2, 'comparison': comparison}, fh, indent=2)
     finally:
