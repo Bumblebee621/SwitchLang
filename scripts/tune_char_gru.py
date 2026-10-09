@@ -1,49 +1,56 @@
 """
-tune_char_gru.py — Reusable Hyperparameter Optimization for SwitchLang Char-GRU models.
+tune_char_gru.py — Char-GRU hyperparameter search ranked by switching quality.
 
-Features:
-- Multi-core parallel trial evaluation across CPU cores (--jobs N).
-- Coarse-to-fine search mode (--coarse-to-fine) scanning architecture first, then regularization.
-- Unbiased held-out validation loss & perplexity ranking with zero data leakage.
-- Direct comparison scoreboard against the production baseline.
-- Automatic weight export for winning configurations.
+Objective A: an EN+HE GRU pair is scored by FN at an FP budget. Delta is swept upward; at
+the first delta where every language's FP/1k is within budget, the score is the sum of the
+two languages' FN/1k there. The budget is the quadgram's FP/1k at Δ6.0 with no fast switch
+(the shipped quadgram behaviour) on the same held-out lines. A pair that never meets the
+budget is infeasible and ranks last. Validation loss is reported, not ranked on.
+
+--lang picks whose GRU takes the candidate hyperparameters; the other language trains with
+BASELINE_PARAMS. Both languages are always scored: the app has one delta for both.
+
+Phase 1 searches the training hyperparameters at the current UNIGRAM_FLOOR / FAST_SWITCH_MARGIN,
+by random search (--trials) or --coarse-to-fine (shape and lr, then regularization).
+Phase 2 sweeps floor x margin on the phase-1 winner and reports the tuned setting against
+three ablations (no floor, no fast switch, neither), each at its own best setting.
+FP and FN are means over --seeds training seeds.
 
 Usage:
-    # Coarse-to-fine optimization using 4 CPU workers:
-    python scripts/tune_char_gru.py --lang en --coarse-to-fine --jobs 4 --max-words 50000 --epochs 3
-
-    # Parallel 20-trial random search:
-    python scripts/tune_char_gru.py --lang en --trials 20 --jobs 4 --max-words 50000
-
-    # Fast self-test:
-    python scripts/tune_char_gru.py --test
+    .venv/bin/python scripts/tune_char_gru.py --lang en --coarse-to-fine --seeds 0 1 --out evaluation/tune_char_gru_en.json
 """
 
 import argparse
-from concurrent.futures import ProcessPoolExecutor
 import itertools
 import json
 import logging
 import math
 import os
 import random
+import shutil
+import statistics
 import sys
-import time
+import tempfile
 
+from tqdm import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 
-# Ensure switchlang modules can be imported
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from scripts.train_char_gru import (
-    train_model,
-    export_numpy_weights,
-    load_words_from_corpus,
-    EN_CHARS,
-    HE_CHARS,
-)
+from core.engine import FAST_SWITCH_MARGIN
+from core.neural_model import UNIGRAM_FLOOR
+from evaluation.benchmark import run_test
+from evaluation.kfold_cv import ALLOWED, CHARS, extract_words_from_lines, load_pool
+from scripts.build_quadgrams import build_quadgrams_from_lines, save_model_data_to_trie
+from scripts.train_char_gru import GRU_HPARAMS, export_numpy_weights, train_model
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s]: %(message)s')
 logger = logging.getLogger('tune_char_gru')
+
+K = 5   # held-out test = every K-th line, as fold 1 of kfold_cv
+
+# Candidate #0: the shipped training setup. Epochs are not searched.
+BASELINE_PARAMS = {k: v for k, v in GRU_HPARAMS.items() if k != 'epochs'}
 
 LANGS = ('en', 'he')
 BUDGET_DELTA = 6.0                                   # shipped baseline_delta
@@ -91,16 +98,6 @@ def ablations(rows):
     }
 
 
-# Production baseline hyperparameters
-BASELINE_PARAMS = {
-    'emb_dim': 64,
-    'hidden_dim': 128,
-    'lr': 0.01,
-    'dropout': 0.1,
-    'weight_decay': 1e-4,
-    'batch_size': 512,
-}
-
 # Default search space expanded toward higher capacity and higher learning rate
 DEFAULT_SEARCH_SPACE = {
     'emb_dim': [32, 48, 64],
@@ -124,341 +121,193 @@ def compute_param_count(vocab_size, emb_dim, hidden_dim):
     return n_params, size_kb
 
 
-def generate_candidates(trials=10, grid=False, search_space=None, seed=42):
-    """Generate candidate hyperparameter configurations with baseline as candidate #0."""
+def generate_candidates(trials, seed=42, search_space=None):
+    """Random search: baseline first, then unique random draws from the search space."""
     space = search_space or DEFAULT_SEARCH_SPACE
-    candidates = [dict(BASELINE_PARAMS)]
-
-    if grid:
-        keys = list(space.keys())
-        combos = list(itertools.product(*(space[k] for k in keys)))
-        for c in combos:
-            item = dict(zip(keys, c))
-            if item != BASELINE_PARAMS:
-                candidates.append(item)
-            if len(candidates) >= trials:
-                break
-    else:
-        rng = random.Random(seed)
-        seen = {tuple(sorted(BASELINE_PARAMS.items()))}
-        attempts = 0
-        while len(candidates) < trials and attempts < trials * 50:
-            attempts += 1
-            cand = {k: rng.choice(v) for k, v in space.items()}
-            key = tuple(sorted(cand.items()))
-            if key not in seen:
-                seen.add(key)
-                candidates.append(cand)
-
-    return candidates[:trials]
-
-
-def generate_coarse_candidates():
-    """Stage 1: Architecture & LR grid expanded toward higher hidden_dim & lr (27 combinations)."""
-    combos = itertools.product([32, 48, 64], [64, 80, 96], [0.004, 0.006, 0.008])
-    return [
-        {
-            'emb_dim': emb,
-            'hidden_dim': hid,
-            'lr': lr,
-            'dropout': 0.05,
-            'weight_decay': 0.0,
-            'batch_size': 256,
-        }
-        for emb, hid, lr in combos
-    ]
-
-
-def generate_fine_candidates(best_arch):
-    """Stage 2: Regularization & Batch size grid around best architecture (18 combinations)."""
-    combos = itertools.product([0.0, 0.05, 0.10], [0.0, 1e-5, 1e-4], [128, 256])
-    return [
-        {
-            'emb_dim': best_arch['emb_dim'],
-            'hidden_dim': best_arch['hidden_dim'],
-            'lr': best_arch['lr'],
-            'dropout': drop,
-            'weight_decay': wd,
-            'batch_size': bs,
-        }
-        for drop, wd, bs in combos
-    ]
-
-
-def _eval_candidate(job):
-    """Worker function for single candidate evaluation."""
-    cand, train_words, val_words, lang, epochs = job
-    import torch
-    torch.set_num_threads(1)
-
-    t0 = time.time()
-    _, vocab_info = train_model(
-        train_words,
-        lang=lang,
-        emb_dim=cand['emb_dim'],
-        hidden_dim=cand['hidden_dim'],
-        epochs=epochs,
-        batch_size=cand['batch_size'],
-        lr=cand['lr'],
-        dropout=cand['dropout'],
-        weight_decay=cand['weight_decay'],
-        val_words=val_words,
-    )
-    elapsed = time.time() - t0
-
-    val_loss = vocab_info.get('val_loss', float('inf'))
-    train_loss = vocab_info.get('train_loss', float('inf'))
-    perp = math.exp(min(val_loss, 20.0))
-    n_params, size_kb = compute_param_count(vocab_info['vocab_size'], cand['emb_dim'], cand['hidden_dim'])
-
-    return {
-        'params': cand,
-        'val_loss': val_loss,
-        'train_loss': train_loss,
-        'perplexity': perp,
-        'params_count': n_params,
-        'size_kb': size_kb,
-        'time_sec': elapsed,
-    }
-
-
-def _run_batch_eval(candidates, train_words, val_words, lang, epochs, jobs=1):
-    """Evaluate a batch of candidates serially or in parallel across processes."""
-    job_payloads = [(c, train_words, val_words, lang, epochs) for c in candidates]
-
-    if jobs > 1 and len(candidates) > 1:
-        with ProcessPoolExecutor(max_workers=jobs) as pool:
-            return list(pool.map(_eval_candidate, job_payloads))
-    else:
-        return [_eval_candidate(p) for p in job_payloads]
-
-
-def tune_hyperparameters(
-    words,
-    lang='en',
-    trials=10,
-    epochs=3,
-    val_ratio=0.15,
-    search_space=None,
-    grid=False,
-    coarse_to_fine=False,
-    jobs=1,
-    seed=42,
-    export_best=None,
-    verbose=True,
-):
-    """Run reusable hyperparameter optimization sweep for Char-GRU model.
-
-    Args:
-        words: List of words for training and validation.
-        lang: Language code ('en' or 'he').
-        trials: Number of configurations to evaluate (ignored if coarse_to_fine=True).
-        epochs: Number of training epochs per candidate.
-        val_ratio: Fraction of words held out for validation (default: 0.15).
-        search_space: Optional dict mapping parameter names to lists of candidate values.
-        grid: If True, sweeps grid combinations; otherwise random search.
-        coarse_to_fine: If True, performs 2-stage coarse-to-fine search (Stage 1: Arch, Stage 2: Reg).
-        jobs: Number of parallel worker processes (default: 1).
-        seed: Random seed for dataset split and candidate sampling.
-        export_best: Optional path base (e.g. 'data/best_model') to save winning model weights.
-        verbose: If True, prints formatted summary table to stdout.
-
-    Returns:
-        tuple: (best_params, all_results_sorted_by_val_loss)
-    """
-    if len(words) < 20:
-        raise ValueError(f"Too few words ({len(words)}) for tuning; need at least 20.")
-
-    # Deterministic train/validation split without data leakage
     rng = random.Random(seed)
-    shuffled_words = list(words)
-    rng.shuffle(shuffled_words)
-
-    n_val = max(5, int(len(shuffled_words) * val_ratio))
-    val_words = shuffled_words[:n_val]
-    train_words = shuffled_words[n_val:]
-
-    raw_results = []
-    baseline_loss = None
-
-    if coarse_to_fine:
-        logger.info(
-            "Starting Coarse-to-Fine search across %d workers (%d train words, %d val words)...",
-            jobs, len(train_words), len(val_words)
-        )
-        # Stage 1: Coarse architecture search (27 trials + baseline)
-        stage1_cands = [dict(BASELINE_PARAMS)] + [
-            c for c in generate_coarse_candidates() if c != BASELINE_PARAMS
-        ]
-        logger.info("── Stage 1: Evaluating %d Architecture & LR configurations ──", len(stage1_cands))
-        stage1_res = _run_batch_eval(stage1_cands, train_words, val_words, lang, epochs, jobs=jobs)
-        raw_results.extend(stage1_res)
-
-        # Baseline loss is trial #0
-        baseline_loss = stage1_res[0]['val_loss']
-
-        # Find best architecture from Stage 1
-        best_s1 = min(stage1_res, key=lambda r: r['val_loss'])
-        best_arch = best_s1['params']
-        logger.info(
-            "Stage 1 Best: emb=%d, hidden=%d, lr=%.4f (Val Loss: %.4f)",
-            best_arch['emb_dim'], best_arch['hidden_dim'], best_arch['lr'], best_s1['val_loss']
-        )
-
-        # Stage 2: Regularization fine-tuning (24 trials)
-        stage2_cands = generate_fine_candidates(best_arch)
-        logger.info("── Stage 2: Fine-tuning Regularization & Batch size (%d combinations) ──", len(stage2_cands))
-        stage2_res = _run_batch_eval(stage2_cands, train_words, val_words, lang, epochs, jobs=jobs)
-        raw_results.extend(stage2_res)
-
-    else:
-        candidates = generate_candidates(trials=trials, grid=grid, search_space=search_space, seed=seed)
-        logger.info(
-            "Starting hyperparameter sweep (%d trials, %d workers, %d train words, %d val words)...",
-            len(candidates), jobs, len(train_words), len(val_words)
-        )
-        raw_results = _run_batch_eval(candidates, train_words, val_words, lang, epochs, jobs=jobs)
-        baseline_loss = raw_results[0]['val_loss']
-
-    # Process and rank results
-    results = []
-    seen_params = set()
-
-    for idx, r in enumerate(raw_results):
-        param_key = tuple(sorted(r['params'].items()))
-        if param_key in seen_params:
-            continue
-        seen_params.add(param_key)
-
-        is_baseline = (r['params'] == BASELINE_PARAMS)
-        val_loss = r['val_loss']
-        d_loss = val_loss - (baseline_loss if baseline_loss is not None else val_loss)
-
-        record = dict(r)
-        record['trial'] = len(results) + 1
-        record['is_baseline'] = is_baseline
-        record['delta_val_loss'] = d_loss
-        results.append(record)
-
-    results.sort(key=lambda r: r['val_loss'])
-
-    if verbose:
-        print_scoreboard(lang, results, baseline_loss)
-
-    best_record = results[0]
-    best_cand = best_record['params']
-
-    # Export best model if requested
-    if export_best:
-        logger.info("Training final winning model for export...")
-        best_model, best_vocab_info = train_model(
-            train_words + val_words,
-            lang=lang,
-            emb_dim=best_cand['emb_dim'],
-            hidden_dim=best_cand['hidden_dim'],
-            epochs=epochs,
-            batch_size=best_cand['batch_size'],
-            lr=best_cand['lr'],
-            dropout=best_cand['dropout'],
-            weight_decay=best_cand['weight_decay'],
-        )
-        export_numpy_weights(best_model, best_vocab_info, export_best)
-        config_path = f"{export_best}_hyperparams.json"
-        with open(config_path, 'w', encoding='utf-8') as f:
-            json.dump({
-                'best_params': best_cand,
-                'val_loss': best_record['val_loss'],
-                'baseline_loss': baseline_loss,
-                'delta_loss': best_record['val_loss'] - (baseline_loss or best_record['val_loss']),
-            }, f, indent=2)
-        logger.info("Saved best hyperparameters config: %s", config_path)
-
-    return best_cand, results
+    candidates = [dict(BASELINE_PARAMS)]
+    seen = {tuple(sorted(BASELINE_PARAMS.items()))}
+    for _ in range(trials * 50):
+        if len(candidates) >= trials:
+            break
+        cand = {k: rng.choice(v) for k, v in space.items()}
+        key = tuple(sorted(cand.items()))
+        if key not in seen:
+            seen.add(key)
+            candidates.append(cand)
+    return candidates
 
 
-def print_scoreboard(lang, results, baseline_loss):
-    """Print formatted hyperparameter comparison scoreboard."""
-    print(f"\n{'=' * 105}")
-    print(f" {lang.upper()} CHAR-GRU HYPERPARAMETER OPTIMIZATION SCOREBOARD ({len(results)} UNIQUE TRIALS)")
-    print(f"{'=' * 105}")
-    print(
-        f"{'Trial':<8} {'emb':>4} {'hid':>4} {'drop':>5} {'lr':>7} {'wd':>8} {'batch':>5} | "
-        f"{'Val Loss':>8} {'Perp':>7} {'ΔLoss':>8} | {'Params':>8} {'Size':>7} {'Time':>6}"
-    )
-    print("-" * 105)
+def coarse_candidates():
+    """Stage 1: shape and learning rate, regularization held at the baseline (27 configs, baseline first)."""
+    grid = [{**BASELINE_PARAMS, 'emb_dim': e, 'hidden_dim': h, 'lr': lr}
+            for e, h, lr in itertools.product([32, 48, 64], [64, 80, 96], [0.004, 0.006, 0.008])]
+    return [dict(BASELINE_PARAMS)] + [c for c in grid if c != BASELINE_PARAMS]
 
-    for r in results:
+
+def fine_candidates(arch):
+    """Stage 2: regularization and batch size around the stage-1 winner *arch* (18 configs)."""
+    return [{**arch, 'dropout': d, 'weight_decay': wd, 'batch_size': bs}
+            for d, wd, bs in itertools.product([0.0, 0.05, 0.10], [0.0, 1e-5, 1e-4], [128, 256])]
+
+
+def prepare_split(data_dir, max_lines, train_words, jobs, work_dir):
+    """Hold out every K-th line per language, build quadgrams on the rest, measure the FP budget."""
+    split = {'test': {}, 'words': {}, 'quad': {}}
+    for lang in LANGS:
+        lines = load_pool(lang, data_dir, K, max_lines, train_words)
+        train = [l for i, l in enumerate(lines) if i % K]
+        split['test'][lang] = [l for i, l in enumerate(lines) if not i % K]
+        split['words'][lang] = extract_words_from_lines(train, CHARS[lang], max_words=None)
+        base = os.path.join(work_dir, f'quad_{lang}')
+        counts = build_quadgrams_from_lines(train, ALLOWED[lang], min_count=2, num_workers=jobs)
+        save_model_data_to_trie(counts, f'{base}.marisa', f'{base}.meta.json')
+        split['quad'][f'{lang}_model_path'] = f'{base}.marisa'
+    split['budget'] = {
+        lang: run_test('fp', split['test'][lang], lang, BUDGET_DELTA, data_dir, jobs=jobs,
+                       model_type='quadgram', fast_margin=math.inf, **split['quad']).fp_per_1k
+        for lang in LANGS
+    }
+    logger.info("FP budget (quadgram, Δ%g, no fast switch): %s", BUDGET_DELTA, split['budget'])
+    return split
+
+
+def train_one(lang, hp, seed, split, work_dir, memo):
+    """Train one GRU on the split's words, memoized on (lang, hp, seed); return (npz path, val loss)."""
+    key = (lang, tuple(sorted(hp.items())), seed)
+    if key not in memo:
+        words = split['words'][lang]
+        n_val = len(words) // 20   # corpus-tail 5% held out, as train_char_gru does
+        model, info = train_model(words[:-n_val], lang=lang, val_words=words[-n_val:], seed=seed, **hp)
+        base = os.path.join(work_dir, f'gru{len(memo)}_{lang}')
+        export_numpy_weights(model, info, base)
+        memo[key] = (f'{base}.npz', info['val_loss'])
+    return memo[key]
+
+
+def train_pair(hp, searched, split, seed, work_dir, memo):
+    """EN+HE GRUs: languages in *searched* take *hp*, the others BASELINE_PARAMS.
+
+    Returns (run_test model-path kwargs, {lang: val loss}).
+    """
+    paths, val = {}, {}
+    for lang in LANGS:
+        paths[f'{lang}_model_path'], val[lang] = train_one(
+            lang, hp if lang in searched else BASELINE_PARAMS, seed, split, work_dir, memo)
+    return paths, val
+
+
+def score(pairs, split, floor, margin, data_dir, jobs):
+    """Objective A for one floor/margin, FP and FN averaged over the seed model *pairs*."""
+    def run(test, lang, delta):
+        return [run_test(test, split['test'][lang], lang, delta, data_dir, jobs=jobs,
+                         model_type='neural', floor=floor, fast_margin=margin, **p) for p in pairs]
+
+    def fp_at(delta):
+        return {lang: statistics.mean(r.fp_per_1k for r in run('fp', lang, delta)) for lang in LANGS}
+
+    def fn_at(delta):
+        out = {}
+        for lang in LANGS:
+            reports = run('fn', lang, delta)
+            out[lang] = {'fn': statistics.mean(r.fn_per_1k for r in reports),
+                         'med': statistics.mean(statistics.median(r.latency_values) if r.latency_values else 0.0
+                                                for r in reports)}
+        return out
+
+    return fn_at_budget(fp_at, fn_at, split['budget'])
+
+
+def phase1(candidates, desc, searched, split, seeds, data_dir, jobs, work_dir, memo):
+    """Score training-hyperparameter *candidates* at the current floor and margin, best first."""
+    rows = []
+    for i, hp in enumerate(tqdm(candidates, desc=desc, unit='config')):
+        trained = [train_pair(hp, searched, split, s, work_dir, memo) for s in seeds]
+        pairs = [p for p, _ in trained]
+        rows.append({'params': hp, 'is_baseline': hp == BASELINE_PARAMS, 'pairs': pairs,
+                     'val_loss': {lang: statistics.mean(v[lang] for _, v in trained) for lang in searched},
+                     'result': score(pairs, split, UNIGRAM_FLOOR, FAST_SWITCH_MARGIN, data_dir, jobs)})
+        logger.info("%s %d/%d %s -> %s", desc, i + 1, len(candidates), hp, _fmt(rows[-1]['result']))
+    return sorted(rows, key=rank_key)
+
+
+def phase2(pairs, split, data_dir, jobs):
+    """Every floor x margin on fixed models. Floor is the outer loop: margins reuse the score cache."""
+    settings = list(itertools.product(FLOORS, MARGINS))
+    return [{'floor': f, 'margin': m, 'result': score(pairs, split, f, m, data_dir, jobs)}
+            for f, m in tqdm(settings, desc='phase 2', unit='setting')]
+
+
+def _fmt(res):
+    if res is None:
+        return "infeasible (no delta meets the FP budget)"
+    return (f"Δ{res['delta']:<5g} FP en {res['fp']['en']:.3f} he {res['fp']['he']:.3f} | "
+            f"FN en {res['fn']['en']:.3f} he {res['fn']['he']:.3f} sum {res['score']:.3f} | "
+            f"med lat en {res['med']['en']:.1f} he {res['med']['he']:.1f}")
+
+
+def print_report(budget, searched, p1, comparison):
+    print(f"\nFP budget per 1k words (quadgram, Δ{BUDGET_DELTA:g}, no fast switch): "
+          f"en {budget['en']:.3f}  he {budget['he']:.3f}")
+    print(f"\nPHASE 1 — training hyperparameters of {'+'.join(searched)} "
+          f"(floor {UNIGRAM_FLOOR:g}, margin {FAST_SWITCH_MARGIN:g}), best first")
+    for r in p1:
         p = r['params']
-        b_mark = " (B)" if r['is_baseline'] else ""
-        trial_str = f"#{r['trial']}{b_mark}"
-        d_str = f"{r['delta_val_loss']:>+8.4f}" if baseline_loss is not None else "     0.0"
-
-        print(
-            f"{trial_str:<8} {p['emb_dim']:>4} {p['hidden_dim']:>4} {p['dropout']:>5.2f} "
-            f"{p['lr']:>7.4f} {p['weight_decay']:>8.1e} {p['batch_size']:>5} | "
-            f"{r['val_loss']:>8.4f} {r['perplexity']:>7.2f} {d_str} | "
-            f"{r['params_count']:>8,} {r['size_kb']:>6.1f}K {r['time_sec']:>5.1f}s"
-        )
-
-    print("-" * 105)
-    best = results[0]
-    p_best = best['params']
-    print(f"OPTIMAL: #{best['trial']} (Val Loss: {best['val_loss']:.4f}, Perplexity: {best['perplexity']:.2f})")
-    print(
-        f"  emb_dim={p_best['emb_dim']}, hidden_dim={p_best['hidden_dim']}, "
-        f"lr={p_best['lr']}, dropout={p_best['dropout']}, "
-        f"weight_decay={p_best['weight_decay']}, batch_size={p_best['batch_size']}"
-    )
-    print(f"{'=' * 105}\n")
+        val = ' '.join(f"{lang} {v:.4f}" for lang, v in r['val_loss'].items())
+        tag = ' (baseline)' if r['is_baseline'] else ''
+        print(f"  emb {p['emb_dim']:>3} hid {p['hidden_dim']:>3} drop {p['dropout']:.2f} lr {p['lr']:.4f} "
+              f"wd {p['weight_decay']:.0e} bs {p['batch_size']:>3} | val {val} | {_fmt(r['result'])}{tag}")
+    print("\nPHASE 2 — floor / fast-switch on the phase-1 winner")
+    for name, r in comparison.items():
+        knobs = '' if r is None else f"floor {r['floor']:g}, margin {r['margin']:g}"
+        print(f"  {name:<22} {knobs:<24} {_fmt(r and r['result'])}")
 
 
 def main():
-    default_jobs = min(4, os.cpu_count() or 1)
-    parser = argparse.ArgumentParser(description="Optimize hyperparameters for SwitchLang Char-GRU models")
-    parser.add_argument('--lang', choices=['en', 'he', 'both'], default='en', help="Language to tune (default: en)")
-    parser.add_argument('--data-dir', default='data', help="Data directory containing corpora")
-    parser.add_argument('--max-words', type=int, default=50_000, help="Number of corpus words to load (default: 50000)")
-    parser.add_argument('--trials', type=int, default=10, help="Number of hyperparameter trials (default: 10)")
-    parser.add_argument('--epochs', type=int, default=3, help="Training epochs per trial (default: 3)")
-    parser.add_argument('--coarse-to-fine', action='store_true', help="Run 2-stage coarse-to-fine grid search")
-    parser.add_argument('--grid', action='store_true', help="Run standard Cartesian grid sweep")
-    parser.add_argument('-j', '--jobs', type=int, default=default_jobs, help=f"Parallel worker processes (default: {default_jobs})")
-    parser.add_argument('--export-best', metavar='PATH_BASE', help="Export winning weights to .npz/.meta.json")
-    parser.add_argument('--seed', type=int, default=42, help="Random seed (default: 42)")
-    parser.add_argument('--test', action='store_true', help="Run fast self-test")
+    parser = argparse.ArgumentParser(description="Tune Char-GRU hyperparameters by FN at an FP budget")
+    parser.add_argument('--lang', choices=['en', 'he', 'both'], default='both',
+                        help="Whose GRU takes the candidate hyperparameters; the other uses the baseline. "
+                             "Both languages are always scored (default: both)")
+    parser.add_argument('--coarse-to-fine', action='store_true',
+                        help="Stage 1 shape x lr (27 configs), stage 2 regularization x batch (18) "
+                             "instead of random search")
+    parser.add_argument('--data-dir', default='data')
+    parser.add_argument('--max-lines', type=int, default=150_000, help="Corpus lines read per language (default: 150000)")
+    parser.add_argument('--train-words', type=int, default=1_000_000, help="Training words per language (default: 1000000)")
+    parser.add_argument('--trials', type=int, default=12, help="Random-search candidates, baseline included (default: 12)")
+    parser.add_argument('--seeds', type=int, nargs='+', default=[0, 1], help="Training seeds per candidate (default: 0 1)")
+    parser.add_argument('--sample-seed', type=int, default=42, help="Seed for drawing random candidates (default: 42)")
+    parser.add_argument('-j', '--jobs', type=int, default=os.cpu_count() or 4, help="Evaluation worker processes")
+    parser.add_argument('--out', default=None, help="Write budget, both phases and the comparison to this JSON file")
     args = parser.parse_args()
 
-    if args.test:
-        test_words = ['hello', 'world', 'system', 'language', 'switch', 'keyboard', 'testing'] * 30
-        print("[SELF-TEST] Running fast hyperparameter optimization check...")
-        best_p, res = tune_hyperparameters(test_words, lang='en', trials=2, epochs=1, jobs=1, verbose=True)
-        print(f"[SELF-TEST] Success! Best params: {best_p}")
-        return
-
     data_dir = os.path.abspath(args.data_dir)
-    langs = ['en', 'he'] if args.lang == 'both' else [args.lang]
+    searched = LANGS if args.lang == 'both' else (args.lang,)
+    work_dir = tempfile.mkdtemp(prefix='switchlang_tune_')
+    memo = {}
+    try:
+        with logging_redirect_tqdm():
+            split = prepare_split(data_dir, args.max_lines, args.train_words, args.jobs, work_dir)
 
-    for lang in langs:
-        corpus_path = os.path.join(data_dir, f"{lang}_corpus.txt")
-        if not os.path.exists(corpus_path):
-            logger.error("Corpus not found: %s", corpus_path)
-            continue
+            def run(candidates, desc):
+                return phase1(candidates, desc, searched, split, args.seeds, data_dir, args.jobs, work_dir, memo)
 
-        raw_chars = EN_CHARS if lang == 'en' else HE_CHARS
-        words = load_words_from_corpus(corpus_path, max_words=args.max_words, allowed_chars=raw_chars)
-
-        tune_hyperparameters(
-            words,
-            lang=lang,
-            trials=args.trials,
-            epochs=args.epochs,
-            grid=args.grid,
-            coarse_to_fine=args.coarse_to_fine,
-            jobs=args.jobs,
-            seed=args.seed,
-            export_best=args.export_best,
-            verbose=True,
-        )
+            if args.coarse_to_fine:
+                stage1 = run(coarse_candidates(), 'stage 1')
+                p1 = sorted(stage1 + run(fine_candidates(stage1[0]['params']), 'stage 2'), key=rank_key)
+            else:
+                p1 = run(generate_candidates(args.trials, args.sample_seed), 'phase 1')
+            p2 = phase2(p1[0]['pairs'], split, data_dir, args.jobs)
+        comparison = ablations(p2)
+        print_report(split['budget'], searched, p1, comparison)
+        if args.out:
+            with open(args.out, 'w', encoding='utf-8') as fh:
+                json.dump({'lang': args.lang, 'mode': 'coarse-to-fine' if args.coarse_to_fine else 'random',
+                           'budget': split['budget'], 'seeds': args.seeds,
+                           'phase1': [{k: v for k, v in r.items() if k != 'pairs'} for r in p1],
+                           'phase2': p2, 'comparison': comparison}, fh, indent=2)
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 if __name__ == '__main__':

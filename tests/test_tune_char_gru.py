@@ -9,7 +9,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from scripts.tune_char_gru import ablations, best, fn_at_budget
+from scripts.tune_char_gru import BASELINE_PARAMS, ablations, best, coarse_candidates, fine_candidates, fn_at_budget
 
 BUDGET = {'en': 0.10, 'he': 0.02}
 
@@ -55,6 +55,22 @@ class TestAblations(unittest.TestCase):
     def test_best_ranks_infeasible_last(self):
         rows = [self._row(0.0, 2.5, None), self._row(0.0, 3.5, 9.0)]
         self.assertEqual(best(rows), rows[1])
+
+
+class TestCoarseToFine(unittest.TestCase):
+
+    def test_stage1_starts_at_baseline_and_holds_27_unique(self):
+        cands = coarse_candidates()
+        self.assertEqual(cands[0], BASELINE_PARAMS)
+        self.assertEqual(len({tuple(sorted(c.items())) for c in cands}), 27)
+        self.assertEqual(len(cands), 27)
+
+    def test_stage2_varies_only_regularization_and_batch(self):
+        cands = fine_candidates(BASELINE_PARAMS)
+        self.assertEqual(len({tuple(sorted(c.items())) for c in cands}), 18)
+        for c in cands:
+            self.assertEqual((c['emb_dim'], c['hidden_dim'], c['lr']),
+                             (BASELINE_PARAMS['emb_dim'], BASELINE_PARAMS['hidden_dim'], BASELINE_PARAMS['lr']))
 
 
 if __name__ == '__main__':
