@@ -1155,6 +1155,10 @@ def main():
         help='Worker processes for scoring (default: all cores).  1 disables.',
     )
     parser.add_argument(
+        '--max-flagged', type=int, default=25, metavar='N',
+        help='Flagged lines to print per test, worst first (default: 25).',
+    )
+    parser.add_argument(
         '--confirmations', type=int, default=2,
         help='Number of consecutive hits required for mid-word switch (default: 2).',
     )
@@ -1335,7 +1339,7 @@ def main():
                   alpha=args.alpha, fast_margin=args.fast_margin)
 
     report_kwargs = dict(delta=args.baseline_delta, req_confirmations=args.confirmations,
-                          mode=args.mode, jobs=args.jobs)
+                          mode=args.mode, jobs=args.jobs, max_flagged=args.max_flagged)
 
     if args.test in ('fp', 'both'):
         fp = run_test('fp', lines, args.lang, args.baseline_delta, **common)

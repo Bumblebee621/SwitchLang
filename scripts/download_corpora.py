@@ -46,12 +46,31 @@ SHARDS_PER_LANG = 6
 DOC_KEEP_PROB = 0.12
 # 0.5% of a 5M-line corpus; stops a few big sites setting the corpus's register.
 SITE_CAP = 25_000
+# Sites never read, subdomains included: mostly religious/rabbinic text whose
+# register (Aramaic, archaic Hebrew) is far from what users type.  Picked by
+# eye from the top 100 HE sites by word count (scripts/top_sites.py, a 1/10
+# sample); the long tail was never reviewed, so more sites probably belong
+# here.  On the v1 corpus (evaluation/build_v1_blacklist.py) it cost the
+# quadgram a little HE accuracy: FP 237 -> 254, FN 2.77 -> 2.81 per 1k words.
+BLACKLIST = frozenset({
+    'yeshiva.org.il', 'musaf-shabbat.com', 'mikyab.net', 'laitman.co.il', 'daf-yomi.com',
+    'dintora.org', 'hamichlol.org.il', 'en.globes.co.il', 'he.chabad.org', 'chabad.org.il',
+    'shabes.net', 'sefaria.org', 'digital-archive.org.il', 'halachabrura.org', 'haoros.com',
+    'parshan.co.il', 'ph.yhb.org.il', 'maharitz.co.il', 'torah.etzion.org.il', 'shofar.tv',
+    'psika.net',
+})
 
 
 def site_of(url):
     """Host of *url* without 'www'/'m' labels, so mobile and desktop count as one site."""
     host = urlparse(url or '').netloc.lower()
     return '.'.join(label for label in host.split('.') if label not in ('www', 'm'))
+
+
+def blacklisted(site):
+    """True if *site* or one of its parent domains is in BLACKLIST."""
+    labels = site.split('.')
+    return any('.'.join(labels[i:]) in BLACKLIST for i in range(len(labels)))
 
 
 def round_robin(iterables):
@@ -78,6 +97,9 @@ def sample_lines(docs, keep_prob, seed, site_cap):
         if rng.random() >= keep_prob:
             continue
         site = site_of(doc.get('url'))
+        # Checked after the draw so the blacklist doesn't reshuffle which other documents are kept
+        if blacklisted(site):
+            continue
         # Documents can contain multiple lines
         for line in (doc.get('text') or '').split('\n'):
             if site and per_site[site] >= site_cap:
@@ -149,7 +171,7 @@ def stream_corpus(lang: str, out_txt_path: str, max_lines: int) -> None:
     with open(os.path.splitext(out_txt_path)[0] + '.provenance.json', 'w', encoding='utf-8') as f:
         json.dump({'dataset': 'uonlp/CulturaX', 'revision': CULTURAX_REVISION,
                    'shards': shards, 'seed': SEED, 'doc_keep_prob': DOC_KEEP_PROB,
-                   'site_cap': SITE_CAP, 'downloaded': date.today().isoformat(),
+                   'site_cap': SITE_CAP, 'blacklist': sorted(BLACKLIST), 'downloaded': date.today().isoformat(),
                    'lines': lines_written, 'sha256': sha.hexdigest()}, f, indent=2)
     elapsed = time.time() - start_time
     logger.info(f"Wrote {lines_written:,} lines for '{lang}' in {elapsed:.1f}s.")

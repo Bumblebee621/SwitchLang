@@ -3,7 +3,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'scripts'))
-from download_corpora import round_robin, sample_lines, site_of
+from download_corpora import blacklisted, round_robin, sample_lines, site_of
 
 
 class SiteOfTest(unittest.TestCase):
@@ -13,6 +13,12 @@ class SiteOfTest(unittest.TestCase):
 
     def test_missing_url(self):
         self.assertEqual(site_of(None), '')
+
+    def test_blacklist_covers_subdomains_only(self):
+        self.assertTrue(blacklisted(site_of('https://m.yeshiva.org.il/wiki/x')))
+        self.assertTrue(blacklisted('lib.yeshiva.org.il'))
+        self.assertFalse(blacklisted('globes.co.il'))  # only en.globes.co.il is listed
+        self.assertFalse(blacklisted(''))
 
 
 class RoundRobinTest(unittest.TestCase):
