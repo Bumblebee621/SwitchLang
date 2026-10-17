@@ -47,8 +47,9 @@ DOC_KEEP_PROB = 0.12
 # 0.5% of a 5M-line corpus; stops a few big sites setting the corpus's register.
 SITE_CAP = 25_000
 # Sites never read, subdomains included: mostly religious/rabbinic text whose
-# register (Aramaic, archaic Hebrew) is far from what users type.  Picked by
-# eye from the top 100 HE sites by word count (scripts/top_sites.py, a 1/10
+# register (Aramaic, archaic Hebrew) is far from what users type, plus sites
+# traced from junk corpus lines (naama-carmi.com: blog archive menus).  Picked
+# by eye from the top 100 HE sites by word count (scripts/top_sites.py, a 1/10
 # sample); the long tail was never reviewed, so more sites probably belong
 # here.  On the v1 corpus (evaluation/build_v1_blacklist.py) it cost the
 # quadgram a little HE accuracy: FP 237 -> 254, FN 2.77 -> 2.81 per 1k words.
@@ -57,7 +58,7 @@ BLACKLIST = frozenset({
     'dintora.org', 'hamichlol.org.il', 'en.globes.co.il', 'he.chabad.org', 'chabad.org.il',
     'shabes.net', 'sefaria.org', 'digital-archive.org.il', 'halachabrura.org', 'haoros.com',
     'parshan.co.il', 'ph.yhb.org.il', 'maharitz.co.il', 'torah.etzion.org.il', 'shofar.tv',
-    'psika.net',
+    'psika.net', 'naama-carmi.com',
 })
 
 
