@@ -170,6 +170,46 @@ class CharNeuralModel:
         return total_log_prob
 
 
+class EnsembleNeuralModel:
+    """Mean of several CharNeuralModels' next-character probabilities (e.g. one per seed).
+
+    Drop-in for CharNeuralModel: same init_state/step/score/char_to_idx/unk_idx, but the
+    hidden state is a list holding one state per member.
+    """
+
+    def __init__(self, models):
+        if not models:
+            raise ValueError("EnsembleNeuralModel needs at least one model")
+        if any(m.char_to_idx != models[0].char_to_idx for m in models[1:]):
+            raise ValueError("Ensemble members must share the same char_to_idx vocabulary")
+        self.models = list(models)
+        first = self.models[0]
+        self.lang, self.char_to_idx = first.lang, first.char_to_idx
+        self.unk_idx, self.pad_idx = first.unk_idx, first.pad_idx
+
+    def init_state(self):
+        return [m.init_state() for m in self.models]
+
+    def step(self, char, h_prev):
+        """Return (log of the members' mean probability, list of new member states)."""
+        outs = [m.step(char, h) for m, h in zip(self.models, h_prev)]
+        stacked = np.stack([lp for lp, _ in outs])
+        top = stacked.max(axis=0)
+        log_probs = top + np.log(np.exp(stacked - top).sum(axis=0)) - np.log(len(outs))
+        return log_probs, [h for _, h in outs]
+
+    def score(self, text):
+        """Same convention as CharNeuralModel.score, built on step()."""
+        if len(text) < 2:
+            return 0.0
+        text = text.lower()
+        h, total = self.init_state(), 0.0
+        for ch, nxt in zip(text, text[1:]):
+            log_probs, h = self.step(ch, h)
+            total += float(log_probs[self.char_to_idx.get(nxt, self.unk_idx)])
+        return total
+
+
 def load_neural_models(data_dir):
     """Load English and Hebrew CharNeuralModel instances from data directory.
     

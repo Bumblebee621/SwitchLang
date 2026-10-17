@@ -40,7 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.engine import EvaluationEngine, FAST_SWITCH_MARGIN
 from core.quadgram import load_models, QuadgramModel
-from core.neural_model import CharNeuralModel, UNIGRAM_FLOOR
+from core.neural_model import CharNeuralModel, EnsembleNeuralModel, UNIGRAM_FLOOR
 from core.sensitivity import SensitivityManager
 from core.keymap import shadow, VK_TO_CHARS, VK_TO_CHARS_SHIFT
 from scripts.build_quadgrams import ALLOWED_EN, ALLOWED_HE
@@ -171,7 +171,10 @@ class EvaluationHarness:
             # Explicit paths skip the shipped files entirely; the floor applies to both models.
             paths = {'en': en_model_path or os.path.join(data_dir, 'en_char_gru.npz'),
                      'he': he_model_path or os.path.join(data_dir, 'he_char_gru.npz')}
-            models = {lang: CharNeuralModel(path, floor=floor) for lang, path in paths.items()}
+            # A tuple of paths (not a list: run_test hashes it) averages those models.
+            models = {lang: EnsembleNeuralModel([CharNeuralModel(p, floor=floor) for p in path])
+                      if isinstance(path, tuple) else CharNeuralModel(path, floor=floor)
+                      for lang, path in paths.items()}
             collisions_path = os.path.join(data_dir, 'collisions.json')
             self.engine = EvaluationEngine(
                 models['en'], models['he'],
