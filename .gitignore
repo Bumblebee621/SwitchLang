@@ -36,6 +36,8 @@ config.json
 switchlang.log*
 *.csv
 data/*.txt
+!data/he_corpus.txt
+!data/en_corpus.txt
 data/*.gz
 data/*.json
 data/backup_opus/
