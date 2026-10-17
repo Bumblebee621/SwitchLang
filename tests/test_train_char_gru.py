@@ -31,6 +31,11 @@ class TestTrainValLoss(unittest.TestCase):
         for key, value in GRU_HPARAMS.items():
             self.assertEqual(info[key], 1 if key == 'epochs' else value, key)
 
+    def test_cosine_schedule_trains_and_is_recorded(self):
+        _, info = train_model(WORDS, emb_dim=8, hidden_dim=8, epochs=2, cosine=True, device='cpu')
+        self.assertTrue(info['cosine'])
+        self.assertGreater(info['train_loss'], 0.0)
+
     def test_unknown_hyperparameter_rejected(self):
         with self.assertRaises(TypeError):
             train_model(WORDS, hiden_dim=8, epochs=1, device='cpu')

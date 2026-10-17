@@ -13,13 +13,11 @@ import logging
 import os
 import sys
 import time
-from collections import Counter
-
 
 import numpy as np
 import torch
-import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
+from torch import nn
+from torch.utils.data import DataLoader, Dataset
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s]: %(message)s')
 logger = logging.getLogger(__name__)
@@ -50,6 +48,7 @@ GRU_HPARAMS = {
     'weight_decay': 1e-4,
     'batch_size': 512,
     'epochs': 4,
+    'cosine': False,   # cosine-decay lr to 0 over all training steps; off = constant lr
 }
 
 
@@ -160,7 +159,6 @@ def train_model(words, lang='en', val_words=None, device=None, seed=0, **hparams
     hp = {**GRU_HPARAMS, **hparams}
     emb_dim, hidden_dim, dropout = hp['emb_dim'], hp['hidden_dim'], hp['dropout']
     lr, weight_decay, batch_size, epochs = hp['lr'], hp['weight_decay'], hp['batch_size'], hp['epochs']
-    # Fixed seed: unseeded runs on identical data differed up to 11x in benchmark FP rate.
     torch.manual_seed(seed)
     raw_chars = EN_CHARS if lang == 'en' else HE_CHARS
     
@@ -186,6 +184,8 @@ def train_model(words, lang='en', val_words=None, device=None, seed=0, **hparams
     model = CharGRU(vocab_size, emb_dim, hidden_dim, dropout=dropout).to(device)
     criterion = nn.CrossEntropyLoss(ignore_index=0)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    scheduler = (torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs * len(loader))
+                 if hp['cosine'] else None)
 
     model.train()
     start_time = time.time()
@@ -206,6 +206,8 @@ def train_model(words, lang='en', val_words=None, device=None, seed=0, **hparams
             loss = criterion(logits.view(-1, vocab_size), y_batch.view(-1))
             loss.backward()
             optimizer.step()
+            if scheduler:
+                scheduler.step()
 
             total_loss += loss.item()
             total_batches += 1
@@ -322,8 +324,8 @@ def main():
     parser.add_argument('--data-dir', default='data', help="Data directory containing corpora")
     parser.add_argument('--max-words', type=int, default=500_000, help="Word sample size per language")
     for key, value in GRU_HPARAMS.items():
-        parser.add_argument('--' + key.replace('_', '-'), type=type(value), default=value,
-                            help=f"default: {value} (GRU_HPARAMS)")
+        kind = {'action': argparse.BooleanOptionalAction} if isinstance(value, bool) else {'type': type(value)}
+        parser.add_argument('--' + key.replace('_', '-'), default=value, help=f"default: {value} (GRU_HPARAMS)", **kind)
     parser.add_argument('--lang', choices=['en', 'he', 'both'], default='both', help="Language to train")
     parser.add_argument('--val-frac', type=float, default=0.05,
                         help="Fraction of words held out (from the end of the corpus) for validation; 0 disables (default: 0.05)")
