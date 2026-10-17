@@ -1,0 +1,288 @@
+(null): No such file or directory
+2026-10-17 11:05:58,669 [INFO]: Building models using 12 processes...
+(null): No such file or directory
+  Progress: 1/1 chunks merged...2026-10-17 11:06:00,800 [INFO]: Pruned quadgrams at count<=2: 41,422 -> 20,181 keys
+2026-10-17 11:06:00,801 [INFO]: Packing 20181 quads, 12486 tris, 1505 bis...
+2026-10-17 11:06:00,809 [INFO]: Building RecordTrie with 34172 total entries...
+2026-10-17 11:06:00,822 [INFO]: Saving trie to /tmp/switchlang_seedvar_1t_rc0x0/quad_en.marisa...
+2026-10-17 11:06:00,823 [INFO]: Saving metadata to /tmp/switchlang_seedvar_1t_rc0x0/quad_en.meta.json...
+2026-10-17 11:06:00,823 [INFO]: Done! Trie: 0.10 MB, Meta: 1.0 KB
+2026-10-17 11:06:03,528 [INFO]: Building models using 12 processes...
+
+  Progress: 1/1 chunks merged...2026-10-17 11:06:04,675 [INFO]: Pruned quadgrams at count<=2: 68,885 -> 33,640 keys
+2026-10-17 11:06:04,676 [INFO]: Packing 33640 quads, 16752 tris, 1454 bis...
+2026-10-17 11:06:04,686 [INFO]: Building RecordTrie with 51846 total entries...
+2026-10-17 11:06:04,708 [INFO]: Saving trie to /tmp/switchlang_seedvar_1t_rc0x0/quad_he.marisa...
+2026-10-17 11:06:04,708 [INFO]: Saving metadata to /tmp/switchlang_seedvar_1t_rc0x0/quad_he.meta.json...
+2026-10-17 11:06:04,708 [INFO]: Done! Trie: 0.15 MB, Meta: 1.0 KB
+
+2026-10-17 11:06:18,226 [WARNING]: best delta 6 is at the edge of DELTAS (6.0, 7.5, 9.0, 10.5, 12.0, 13.5); widen the grid
+2026-10-17 11:06:18,226 [INFO]: Quadgram reference: Δ6     FP en 0.048 he 0.000 | FN en 1.347 he 1.448 cost 3.273 ±0.46 | med lat en 5.0 he 6.0
+2026-10-17 11:06:18,230 [INFO]: Training en CharGRU (vocab_size=61, emb=32, hidden=96, drop=0.05, lr=0.0040) on 275718 words ...
+(null): No such file or directory
+2026-10-17 11:06:22,874 [INFO]: [en Epoch 1/15] Loss: 2.1353 | Val: 1.8502 (Elapsed: 3.7s)
+2026-10-17 11:06:25,033 [INFO]: [en Epoch 2/15] Loss: 1.8723 | Val: 1.7527 (Elapsed: 5.9s)
+2026-10-17 11:06:27,148 [INFO]: [en Epoch 3/15] Loss: 1.8108 | Val: 1.7098 (Elapsed: 8.0s)
+2026-10-17 11:06:29,309 [INFO]: [en Epoch 4/15] Loss: 1.7815 | Val: 1.6846 (Elapsed: 10.2s)
+2026-10-17 11:06:31,386 [INFO]: [en Epoch 5/15] Loss: 1.7636 | Val: 1.6717 (Elapsed: 12.2s)
+2026-10-17 11:06:33,472 [INFO]: [en Epoch 6/15] Loss: 1.7510 | Val: 1.6618 (Elapsed: 14.3s)
+2026-10-17 11:06:35,663 [INFO]: [en Epoch 7/15] Loss: 1.7427 | Val: 1.6545 (Elapsed: 16.5s)
+2026-10-17 11:06:37,842 [INFO]: [en Epoch 8/15] Loss: 1.7348 | Val: 1.6467 (Elapsed: 18.7s)
+2026-10-17 11:06:39,929 [INFO]: [en Epoch 9/15] Loss: 1.7285 | Val: 1.6404 (Elapsed: 20.8s)
+2026-10-17 11:06:42,034 [INFO]: [en Epoch 10/15] Loss: 1.7228 | Val: 1.6375 (Elapsed: 22.9s)
+2026-10-17 11:06:44,173 [INFO]: [en Epoch 11/15] Loss: 1.7185 | Val: 1.6336 (Elapsed: 25.0s)
+2026-10-17 11:06:46,348 [INFO]: [en Epoch 12/15] Loss: 1.7151 | Val: 1.6302 (Elapsed: 27.2s)
+2026-10-17 11:06:48,488 [INFO]: [en Epoch 13/15] Loss: 1.7131 | Val: 1.6291 (Elapsed: 29.3s)
+2026-10-17 11:06:50,672 [INFO]: [en Epoch 14/15] Loss: 1.7108 | Val: 1.6284 (Elapsed: 31.5s)
+2026-10-17 11:06:52,830 [INFO]: [en Epoch 15/15] Loss: 1.7100 | Val: 1.6281 (Elapsed: 33.7s)
+2026-10-17 11:06:53,080 [INFO]: Saved NumPy weights: /tmp/switchlang_seedvar_1t_rc0x0/run0/gru0_en.npz (165.9 KB)
+2026-10-17 11:06:53,080 [INFO]: Saved metadata: /tmp/switchlang_seedvar_1t_rc0x0/run0/gru0_en.meta.json
+2026-10-17 11:06:53,082 [INFO]: Training he CharGRU (vocab_size=62, emb=32, hidden=96, drop=0.05, lr=0.0040) on 272875 words ...
+2026-10-17 11:06:55,366 [INFO]: [he Epoch 1/15] Loss: 2.4473 | Val: 2.3485 (Elapsed: 2.0s)
+2026-10-17 11:06:57,450 [INFO]: [he Epoch 2/15] Loss: 2.2554 | Val: 2.2742 (Elapsed: 4.1s)
+2026-10-17 11:06:59,483 [INFO]: [he Epoch 3/15] Loss: 2.2045 | Val: 2.2389 (Elapsed: 6.2s)
+2026-10-17 11:07:01,535 [INFO]: [he Epoch 4/15] Loss: 2.1809 | Val: 2.2253 (Elapsed: 8.2s)
+2026-10-17 11:07:03,637 [INFO]: [he Epoch 5/15] Loss: 2.1670 | Val: 2.2193 (Elapsed: 10.3s)
+2026-10-17 11:07:05,759 [INFO]: [he Epoch 6/15] Loss: 2.1579 | Val: 2.2097 (Elapsed: 12.4s)
+2026-10-17 11:07:07,833 [INFO]: [he Epoch 7/15] Loss: 2.1508 | Val: 2.2038 (Elapsed: 14.5s)
+2026-10-17 11:07:09,925 [INFO]: [he Epoch 8/15] Loss: 2.1459 | Val: 2.2027 (Elapsed: 16.6s)
+2026-10-17 11:07:11,938 [INFO]: [he Epoch 9/15] Loss: 2.1417 | Val: 2.1923 (Elapsed: 18.6s)
+2026-10-17 11:07:14,028 [INFO]: [he Epoch 10/15] Loss: 2.1383 | Val: 2.1941 (Elapsed: 20.7s)
+2026-10-17 11:07:16,121 [INFO]: [he Epoch 11/15] Loss: 2.1360 | Val: 2.1970 (Elapsed: 22.8s)
+2026-10-17 11:07:18,250 [INFO]: [he Epoch 12/15] Loss: 2.1341 | Val: 2.1920 (Elapsed: 24.9s)
+2026-10-17 11:07:20,292 [INFO]: [he Epoch 13/15] Loss: 2.1318 | Val: 2.1902 (Elapsed: 27.0s)
+2026-10-17 11:07:22,353 [INFO]: [he Epoch 14/15] Loss: 2.1301 | Val: 2.1892 (Elapsed: 29.0s)
+2026-10-17 11:07:24,459 [INFO]: [he Epoch 15/15] Loss: 2.1284 | Val: 2.1923 (Elapsed: 31.1s)
+2026-10-17 11:07:24,764 [INFO]: Saved NumPy weights: /tmp/switchlang_seedvar_1t_rc0x0/run0/gru1_he.npz (166.3 KB)
+2026-10-17 11:07:24,765 [INFO]: Saved metadata: /tmp/switchlang_seedvar_1t_rc0x0/run0/gru1_he.meta.json
+seed 0: Δ10.5  FP en 0.021 he 0.000 | FN en 1.497 he 2.216 cost 3.919 ±0.41 | med lat en 6.0 he 7.0 | val en 1.6281 he 2.1892
+2026-10-17 11:08:36,849 [INFO]: Training en CharGRU (vocab_size=61, emb=32, hidden=96, drop=0.05, lr=0.0040) on 275718 words ...
+2026-10-17 11:08:39,300 [INFO]: [en Epoch 1/15] Loss: 2.1187 | Val: 1.8404 (Elapsed: 2.2s)
+2026-10-17 11:08:41,477 [INFO]: [en Epoch 2/15] Loss: 1.8712 | Val: 1.7480 (Elapsed: 4.4s)
+2026-10-17 11:08:43,776 [INFO]: [en Epoch 3/15] Loss: 1.8163 | Val: 1.7066 (Elapsed: 6.7s)
+2026-10-17 11:08:46,049 [INFO]: [en Epoch 4/15] Loss: 1.7889 | Val: 1.6867 (Elapsed: 9.0s)
+2026-10-17 11:08:48,270 [INFO]: [en Epoch 5/15] Loss: 1.7702 | Val: 1.6742 (Elapsed: 11.2s)
+2026-10-17 11:08:50,475 [INFO]: [en Epoch 6/15] Loss: 1.7574 | Val: 1.6628 (Elapsed: 13.4s)
+2026-10-17 11:08:52,656 [INFO]: [en Epoch 7/15] Loss: 1.7476 | Val: 1.6563 (Elapsed: 15.6s)
+2026-10-17 11:08:54,839 [INFO]: [en Epoch 8/15] Loss: 1.7400 | Val: 1.6478 (Elapsed: 17.8s)
+2026-10-17 11:08:57,027 [INFO]: [en Epoch 9/15] Loss: 1.7332 | Val: 1.6403 (Elapsed: 20.0s)
+2026-10-17 11:08:59,194 [INFO]: [en Epoch 10/15] Loss: 1.7275 | Val: 1.6361 (Elapsed: 22.1s)
+2026-10-17 11:09:01,371 [INFO]: [en Epoch 11/15] Loss: 1.7237 | Val: 1.6336 (Elapsed: 24.3s)
+2026-10-17 11:09:03,568 [INFO]: [en Epoch 12/15] Loss: 1.7198 | Val: 1.6313 (Elapsed: 26.5s)
+2026-10-17 11:09:05,725 [INFO]: [en Epoch 13/15] Loss: 1.7175 | Val: 1.6301 (Elapsed: 28.7s)
+2026-10-17 11:09:07,897 [INFO]: [en Epoch 14/15] Loss: 1.7153 | Val: 1.6292 (Elapsed: 30.8s)
+2026-10-17 11:09:10,064 [INFO]: [en Epoch 15/15] Loss: 1.7142 | Val: 1.6291 (Elapsed: 33.0s)
+2026-10-17 11:09:10,305 [INFO]: Saved NumPy weights: /tmp/switchlang_seedvar_1t_rc0x0/run1/gru0_en.npz (165.9 KB)
+2026-10-17 11:09:10,305 [INFO]: Saved metadata: /tmp/switchlang_seedvar_1t_rc0x0/run1/gru0_en.meta.json
+2026-10-17 11:09:10,307 [INFO]: Training he CharGRU (vocab_size=62, emb=32, hidden=96, drop=0.05, lr=0.0040) on 272875 words ...
+2026-10-17 11:09:12,682 [INFO]: [he Epoch 1/15] Loss: 2.4401 | Val: 2.3228 (Elapsed: 2.1s)
+2026-10-17 11:09:14,836 [INFO]: [he Epoch 2/15] Loss: 2.2457 | Val: 2.2579 (Elapsed: 4.3s)
+2026-10-17 11:09:16,959 [INFO]: [he Epoch 3/15] Loss: 2.2004 | Val: 2.2285 (Elapsed: 6.4s)
+2026-10-17 11:09:19,138 [INFO]: [he Epoch 4/15] Loss: 2.1792 | Val: 2.2186 (Elapsed: 8.6s)
+2026-10-17 11:09:21,195 [INFO]: [he Epoch 5/15] Loss: 2.1661 | Val: 2.2106 (Elapsed: 10.6s)
+2026-10-17 11:09:23,273 [INFO]: [he Epoch 6/15] Loss: 2.1572 | Val: 2.2019 (Elapsed: 12.7s)
+2026-10-17 11:09:25,429 [INFO]: [he Epoch 7/15] Loss: 2.1513 | Val: 2.2015 (Elapsed: 14.9s)
+2026-10-17 11:09:27,558 [INFO]: [he Epoch 8/15] Loss: 2.1467 | Val: 2.2014 (Elapsed: 17.0s)
+2026-10-17 11:09:29,706 [INFO]: [he Epoch 9/15] Loss: 2.1424 | Val: 2.1931 (Elapsed: 19.2s)
+2026-10-17 11:09:31,863 [INFO]: [he Epoch 10/15] Loss: 2.1394 | Val: 2.1956 (Elapsed: 21.3s)
+2026-10-17 11:09:33,994 [INFO]: [he Epoch 11/15] Loss: 2.1369 | Val: 2.1886 (Elapsed: 23.4s)
+2026-10-17 11:09:36,152 [INFO]: [he Epoch 12/15] Loss: 2.1347 | Val: 2.1929 (Elapsed: 25.6s)
+2026-10-17 11:09:38,306 [INFO]: [he Epoch 13/15] Loss: 2.1325 | Val: 2.1886 (Elapsed: 27.8s)
+2026-10-17 11:09:40,471 [INFO]: [he Epoch 14/15] Loss: 2.1301 | Val: 2.1840 (Elapsed: 29.9s)
+2026-10-17 11:09:42,831 [INFO]: [he Epoch 15/15] Loss: 2.1281 | Val: 2.1852 (Elapsed: 32.3s)
+2026-10-17 11:09:43,166 [INFO]: Saved NumPy weights: /tmp/switchlang_seedvar_1t_rc0x0/run1/gru1_he.npz (166.2 KB)
+2026-10-17 11:09:43,166 [INFO]: Saved metadata: /tmp/switchlang_seedvar_1t_rc0x0/run1/gru1_he.meta.json
+seed 1: Δ12    FP en 0.007 he 0.000 | FN en 1.709 he 2.100 cost 3.878 ±0.36 | med lat en 7.0 he 8.0 | val en 1.6291 he 2.1840
+2026-10-17 11:10:57,967 [INFO]: Training en CharGRU (vocab_size=61, emb=32, hidden=96, drop=0.05, lr=0.0040) on 275718 words ...
+2026-10-17 11:11:00,352 [INFO]: [en Epoch 1/15] Loss: 2.1143 | Val: 1.8284 (Elapsed: 2.2s)
+2026-10-17 11:11:02,551 [INFO]: [en Epoch 2/15] Loss: 1.8595 | Val: 1.7346 (Elapsed: 4.4s)
+2026-10-17 11:11:04,765 [INFO]: [en Epoch 3/15] Loss: 1.8042 | Val: 1.6998 (Elapsed: 6.6s)
+2026-10-17 11:11:06,932 [INFO]: [en Epoch 4/15] Loss: 1.7775 | Val: 1.6771 (Elapsed: 8.8s)
+2026-10-17 11:11:09,220 [INFO]: [en Epoch 5/15] Loss: 1.7608 | Val: 1.6644 (Elapsed: 11.0s)
+2026-10-17 11:11:11,332 [INFO]: [en Epoch 6/15] Loss: 1.7489 | Val: 1.6530 (Elapsed: 13.2s)
+2026-10-17 11:11:13,463 [INFO]: [en Epoch 7/15] Loss: 1.7393 | Val: 1.6445 (Elapsed: 15.3s)
+2026-10-17 11:11:15,573 [INFO]: [en Epoch 8/15] Loss: 1.7322 | Val: 1.6379 (Elapsed: 17.4s)
+2026-10-17 11:11:17,794 [INFO]: [en Epoch 9/15] Loss: 1.7258 | Val: 1.6345 (Elapsed: 19.6s)
+2026-10-17 11:11:20,022 [INFO]: [en Epoch 10/15] Loss: 1.7212 | Val: 1.6300 (Elapsed: 21.8s)
+2026-10-17 11:11:22,178 [INFO]: [en Epoch 11/15] Loss: 1.7171 | Val: 1.6294 (Elapsed: 24.0s)
+2026-10-17 11:11:24,312 [INFO]: [en Epoch 12/15] Loss: 1.7133 | Val: 1.6252 (Elapsed: 26.1s)
+2026-10-17 11:11:26,474 [INFO]: [en Epoch 13/15] Loss: 1.7107 | Val: 1.6236 (Elapsed: 28.3s)
+2026-10-17 11:11:28,647 [INFO]: [en Epoch 14/15] Loss: 1.7091 | Val: 1.6231 (Elapsed: 30.5s)
+2026-10-17 11:11:30,850 [INFO]: [en Epoch 15/15] Loss: 1.7081 | Val: 1.6231 (Elapsed: 32.7s)
+2026-10-17 11:11:31,096 [INFO]: Saved NumPy weights: /tmp/switchlang_seedvar_1t_rc0x0/run2/gru0_en.npz (165.9 KB)
+2026-10-17 11:11:31,096 [INFO]: Saved metadata: /tmp/switchlang_seedvar_1t_rc0x0/run2/gru0_en.meta.json
+2026-10-17 11:11:31,098 [INFO]: Training he CharGRU (vocab_size=62, emb=32, hidden=96, drop=0.05, lr=0.0040) on 272875 words ...
+2026-10-17 11:11:33,544 [INFO]: [he Epoch 1/15] Loss: 2.4415 | Val: 2.3450 (Elapsed: 2.1s)
+2026-10-17 11:11:35,637 [INFO]: [he Epoch 2/15] Loss: 2.2542 | Val: 2.2678 (Elapsed: 4.2s)
+2026-10-17 11:11:37,753 [INFO]: [he Epoch 3/15] Loss: 2.2065 | Val: 2.2381 (Elapsed: 6.3s)
+2026-10-17 11:11:39,842 [INFO]: [he Epoch 4/15] Loss: 2.1826 | Val: 2.2303 (Elapsed: 8.4s)
+2026-10-17 11:11:41,881 [INFO]: [he Epoch 5/15] Loss: 2.1682 | Val: 2.2164 (Elapsed: 10.4s)
+2026-10-17 11:11:43,924 [INFO]: [he Epoch 6/15] Loss: 2.1589 | Val: 2.2130 (Elapsed: 12.5s)
+2026-10-17 11:11:46,012 [INFO]: [he Epoch 7/15] Loss: 2.1523 | Val: 2.2092 (Elapsed: 14.6s)
+2026-10-17 11:11:48,049 [INFO]: [he Epoch 8/15] Loss: 2.1471 | Val: 2.2067 (Elapsed: 16.6s)
+2026-10-17 11:11:50,124 [INFO]: [he Epoch 9/15] Loss: 2.1427 | Val: 2.1993 (Elapsed: 18.7s)
+2026-10-17 11:11:52,158 [INFO]: [he Epoch 10/15] Loss: 2.1395 | Val: 2.1979 (Elapsed: 20.7s)
+2026-10-17 11:11:54,213 [INFO]: [he Epoch 11/15] Loss: 2.1365 | Val: 2.1939 (Elapsed: 22.8s)
+2026-10-17 11:11:56,304 [INFO]: [he Epoch 12/15] Loss: 2.1337 | Val: 2.1898 (Elapsed: 24.9s)
+2026-10-17 11:11:58,415 [INFO]: [he Epoch 13/15] Loss: 2.1320 | Val: 2.1880 (Elapsed: 27.0s)
+2026-10-17 11:12:00,714 [INFO]: [he Epoch 14/15] Loss: 2.1302 | Val: 2.1880 (Elapsed: 29.3s)
+2026-10-17 11:12:02,782 [INFO]: [he Epoch 15/15] Loss: 2.1289 | Val: 2.1862 (Elapsed: 31.3s)
+2026-10-17 11:12:03,067 [INFO]: Saved NumPy weights: /tmp/switchlang_seedvar_1t_rc0x0/run2/gru1_he.npz (166.5 KB)
+2026-10-17 11:12:03,067 [INFO]: Saved metadata: /tmp/switchlang_seedvar_1t_rc0x0/run2/gru1_he.meta.json
+seed 2: Δ9     FP en 0.096 he 0.000 | FN en 1.497 he 1.544 cost 3.999 ±0.59 | med lat en 5.0 he 6.0 | val en 1.6231 he 2.1862
+2026-10-17 11:13:11,678 [INFO]: Training en CharGRU (vocab_size=61, emb=32, hidden=96, drop=0.05, lr=0.0040) on 275718 words ...
+2026-10-17 11:13:14,050 [INFO]: [en Epoch 1/15] Loss: 2.1104 | Val: 1.8232 (Elapsed: 2.2s)
+2026-10-17 11:13:16,246 [INFO]: [en Epoch 2/15] Loss: 1.8564 | Val: 1.7353 (Elapsed: 4.3s)
+2026-10-17 11:13:18,444 [INFO]: [en Epoch 3/15] Loss: 1.8023 | Val: 1.6974 (Elapsed: 6.5s)
+2026-10-17 11:13:20,637 [INFO]: [en Epoch 4/15] Loss: 1.7763 | Val: 1.6803 (Elapsed: 8.7s)
+2026-10-17 11:13:22,860 [INFO]: [en Epoch 5/15] Loss: 1.7587 | Val: 1.6661 (Elapsed: 11.0s)
+2026-10-17 11:13:24,963 [INFO]: [en Epoch 6/15] Loss: 1.7466 | Val: 1.6551 (Elapsed: 13.1s)
+2026-10-17 11:13:27,129 [INFO]: [en Epoch 7/15] Loss: 1.7377 | Val: 1.6470 (Elapsed: 15.2s)
+2026-10-17 11:13:29,316 [INFO]: [en Epoch 8/15] Loss: 1.7301 | Val: 1.6406 (Elapsed: 17.4s)
+2026-10-17 11:13:31,518 [INFO]: [en Epoch 9/15] Loss: 1.7240 | Val: 1.6359 (Elapsed: 19.6s)
+2026-10-17 11:13:33,613 [INFO]: [en Epoch 10/15] Loss: 1.7186 | Val: 1.6326 (Elapsed: 21.7s)
+2026-10-17 11:13:35,779 [INFO]: [en Epoch 11/15] Loss: 1.7151 | Val: 1.6284 (Elapsed: 23.9s)
+2026-10-17 11:13:37,980 [INFO]: [en Epoch 12/15] Loss: 1.7119 | Val: 1.6264 (Elapsed: 26.1s)
+2026-10-17 11:13:40,121 [INFO]: [en Epoch 13/15] Loss: 1.7092 | Val: 1.6250 (Elapsed: 28.2s)
+2026-10-17 11:13:42,297 [INFO]: [en Epoch 14/15] Loss: 1.7077 | Val: 1.6241 (Elapsed: 30.4s)
+2026-10-17 11:13:44,467 [INFO]: [en Epoch 15/15] Loss: 1.7064 | Val: 1.6242 (Elapsed: 32.6s)
+2026-10-17 11:13:44,710 [INFO]: Saved NumPy weights: /tmp/switchlang_seedvar_1t_rc0x0/run3/gru0_en.npz (165.7 KB)
+2026-10-17 11:13:44,710 [INFO]: Saved metadata: /tmp/switchlang_seedvar_1t_rc0x0/run3/gru0_en.meta.json
+2026-10-17 11:13:44,712 [INFO]: Training he CharGRU (vocab_size=62, emb=32, hidden=96, drop=0.05, lr=0.0040) on 272875 words ...
+2026-10-17 11:13:47,040 [INFO]: [he Epoch 1/15] Loss: 2.4349 | Val: 2.3260 (Elapsed: 2.1s)
+2026-10-17 11:13:49,116 [INFO]: [he Epoch 2/15] Loss: 2.2456 | Val: 2.2610 (Elapsed: 4.2s)
+2026-10-17 11:13:51,149 [INFO]: [he Epoch 3/15] Loss: 2.1990 | Val: 2.2351 (Elapsed: 6.2s)
+2026-10-17 11:13:53,224 [INFO]: [he Epoch 4/15] Loss: 2.1773 | Val: 2.2183 (Elapsed: 8.3s)
+2026-10-17 11:13:55,312 [INFO]: [he Epoch 5/15] Loss: 2.1649 | Val: 2.2108 (Elapsed: 10.3s)
+2026-10-17 11:13:57,401 [INFO]: [he Epoch 6/15] Loss: 2.1566 | Val: 2.2066 (Elapsed: 12.4s)
+2026-10-17 11:13:59,520 [INFO]: [he Epoch 7/15] Loss: 2.1500 | Val: 2.2042 (Elapsed: 14.6s)
+2026-10-17 11:14:01,654 [INFO]: [he Epoch 8/15] Loss: 2.1454 | Val: 2.1993 (Elapsed: 16.7s)
+2026-10-17 11:14:03,756 [INFO]: [he Epoch 9/15] Loss: 2.1422 | Val: 2.1958 (Elapsed: 18.8s)
+2026-10-17 11:14:05,872 [INFO]: [he Epoch 10/15] Loss: 2.1389 | Val: 2.1984 (Elapsed: 20.9s)
+2026-10-17 11:14:07,974 [INFO]: [he Epoch 11/15] Loss: 2.1367 | Val: 2.1879 (Elapsed: 23.0s)
+2026-10-17 11:14:10,035 [INFO]: [he Epoch 12/15] Loss: 2.1339 | Val: 2.1903 (Elapsed: 25.1s)
+2026-10-17 11:14:12,143 [INFO]: [he Epoch 13/15] Loss: 2.1321 | Val: 2.1902 (Elapsed: 27.2s)
+2026-10-17 11:14:14,208 [INFO]: [he Epoch 14/15] Loss: 2.1296 | Val: 2.1888 (Elapsed: 29.2s)
+2026-10-17 11:14:16,300 [INFO]: [he Epoch 15/15] Loss: 2.1278 | Val: 2.1890 (Elapsed: 31.3s)
+2026-10-17 11:14:16,581 [INFO]: Saved NumPy weights: /tmp/switchlang_seedvar_1t_rc0x0/run3/gru1_he.npz (166.4 KB)
+2026-10-17 11:14:16,582 [INFO]: Saved metadata: /tmp/switchlang_seedvar_1t_rc0x0/run3/gru1_he.meta.json
+seed 3: Δ7.5   FP en 0.137 he 0.000 | FN en 1.299 he 1.254 cost 3.920 ±0.66 | med lat en 5.0 he 5.0 | val en 1.6241 he 2.1879
+2026-10-17 11:15:28,550 [INFO]: Training en CharGRU (vocab_size=61, emb=32, hidden=96, drop=0.05, lr=0.0040) on 275718 words ...
+2026-10-17 11:15:30,961 [INFO]: [en Epoch 1/15] Loss: 2.1265 | Val: 1.8364 (Elapsed: 2.2s)
+2026-10-17 11:15:33,104 [INFO]: [en Epoch 2/15] Loss: 1.8646 | Val: 1.7401 (Elapsed: 4.3s)
+2026-10-17 11:15:35,263 [INFO]: [en Epoch 3/15] Loss: 1.8052 | Val: 1.7041 (Elapsed: 6.5s)
+2026-10-17 11:15:37,419 [INFO]: [en Epoch 4/15] Loss: 1.7767 | Val: 1.6802 (Elapsed: 8.7s)
+2026-10-17 11:15:39,592 [INFO]: [en Epoch 5/15] Loss: 1.7588 | Val: 1.6648 (Elapsed: 10.8s)
+2026-10-17 11:15:41,738 [INFO]: [en Epoch 6/15] Loss: 1.7472 | Val: 1.6555 (Elapsed: 13.0s)
+2026-10-17 11:15:43,854 [INFO]: [en Epoch 7/15] Loss: 1.7381 | Val: 1.6495 (Elapsed: 15.1s)
+2026-10-17 11:15:46,048 [INFO]: [en Epoch 8/15] Loss: 1.7311 | Val: 1.6416 (Elapsed: 17.3s)
+2026-10-17 11:15:48,226 [INFO]: [en Epoch 9/15] Loss: 1.7253 | Val: 1.6388 (Elapsed: 19.5s)
+2026-10-17 11:15:50,425 [INFO]: [en Epoch 10/15] Loss: 1.7197 | Val: 1.6336 (Elapsed: 21.7s)
+2026-10-17 11:15:52,577 [INFO]: [en Epoch 11/15] Loss: 1.7153 | Val: 1.6303 (Elapsed: 23.8s)
+2026-10-17 11:15:54,748 [INFO]: [en Epoch 12/15] Loss: 1.7133 | Val: 1.6288 (Elapsed: 26.0s)
+2026-10-17 11:15:56,907 [INFO]: [en Epoch 13/15] Loss: 1.7104 | Val: 1.6268 (Elapsed: 28.1s)
+2026-10-17 11:15:59,039 [INFO]: [en Epoch 14/15] Loss: 1.7086 | Val: 1.6261 (Elapsed: 30.3s)
+2026-10-17 11:16:01,195 [INFO]: [en Epoch 15/15] Loss: 1.7072 | Val: 1.6259 (Elapsed: 32.4s)
+2026-10-17 11:16:01,435 [INFO]: Saved NumPy weights: /tmp/switchlang_seedvar_1t_rc0x0/run4/gru0_en.npz (165.8 KB)
+2026-10-17 11:16:01,435 [INFO]: Saved metadata: /tmp/switchlang_seedvar_1t_rc0x0/run4/gru0_en.meta.json
+2026-10-17 11:16:01,437 [INFO]: Training he CharGRU (vocab_size=62, emb=32, hidden=96, drop=0.05, lr=0.0040) on 272875 words ...
+2026-10-17 11:16:03,741 [INFO]: [he Epoch 1/15] Loss: 2.4505 | Val: 2.3466 (Elapsed: 2.1s)
+2026-10-17 11:16:05,793 [INFO]: [he Epoch 2/15] Loss: 2.2564 | Val: 2.2731 (Elapsed: 4.1s)
+2026-10-17 11:16:07,932 [INFO]: [he Epoch 3/15] Loss: 2.2069 | Val: 2.2360 (Elapsed: 6.3s)
+2026-10-17 11:16:10,004 [INFO]: [he Epoch 4/15] Loss: 2.1832 | Val: 2.2245 (Elapsed: 8.3s)
+2026-10-17 11:16:12,076 [INFO]: [he Epoch 5/15] Loss: 2.1697 | Val: 2.2153 (Elapsed: 10.4s)
+2026-10-17 11:16:14,131 [INFO]: [he Epoch 6/15] Loss: 2.1611 | Val: 2.2135 (Elapsed: 12.5s)
+2026-10-17 11:16:16,191 [INFO]: [he Epoch 7/15] Loss: 2.1534 | Val: 2.2067 (Elapsed: 14.5s)
+2026-10-17 11:16:18,300 [INFO]: [he Epoch 8/15] Loss: 2.1480 | Val: 2.1946 (Elapsed: 16.6s)
+2026-10-17 11:16:20,384 [INFO]: [he Epoch 9/15] Loss: 2.1445 | Val: 2.1981 (Elapsed: 18.7s)
+2026-10-17 11:16:22,446 [INFO]: [he Epoch 10/15] Loss: 2.1402 | Val: 2.1976 (Elapsed: 20.8s)
+2026-10-17 11:16:24,475 [INFO]: [he Epoch 11/15] Loss: 2.1372 | Val: 2.1983 (Elapsed: 22.8s)
+2026-10-17 11:16:26,515 [INFO]: [he Epoch 12/15] Loss: 2.1350 | Val: 2.1892 (Elapsed: 24.8s)
+2026-10-17 11:16:28,612 [INFO]: [he Epoch 13/15] Loss: 2.1333 | Val: 2.1908 (Elapsed: 26.9s)
+2026-10-17 11:16:30,804 [INFO]: [he Epoch 14/15] Loss: 2.1314 | Val: 2.1895 (Elapsed: 29.1s)
+2026-10-17 11:16:32,940 [INFO]: [he Epoch 15/15] Loss: 2.1288 | Val: 2.1858 (Elapsed: 31.3s)
+2026-10-17 11:16:33,237 [INFO]: Saved NumPy weights: /tmp/switchlang_seedvar_1t_rc0x0/run4/gru1_he.npz (166.4 KB)
+2026-10-17 11:16:33,237 [INFO]: Saved metadata: /tmp/switchlang_seedvar_1t_rc0x0/run4/gru1_he.meta.json
+seed 4: Δ7.5   FP en 0.068 he 0.000 | FN en 1.313 he 1.124 cost 3.121 ±0.51 | med lat en 5.0 he 5.0 | val en 1.6259 he 2.1858
+2026-10-17 11:17:43,245 [INFO]: Training en CharGRU (vocab_size=61, emb=32, hidden=96, drop=0.05, lr=0.0040) on 275718 words ...
+2026-10-17 11:17:45,588 [INFO]: [en Epoch 1/15] Loss: 2.1242 | Val: 1.8317 (Elapsed: 2.1s)
+2026-10-17 11:17:47,810 [INFO]: [en Epoch 2/15] Loss: 1.8610 | Val: 1.7409 (Elapsed: 4.4s)
+2026-10-17 11:17:50,008 [INFO]: [en Epoch 3/15] Loss: 1.8049 | Val: 1.7027 (Elapsed: 6.6s)
+2026-10-17 11:17:52,268 [INFO]: [en Epoch 4/15] Loss: 1.7769 | Val: 1.6808 (Elapsed: 8.8s)
+2026-10-17 11:17:54,408 [INFO]: [en Epoch 5/15] Loss: 1.7600 | Val: 1.6660 (Elapsed: 11.0s)
+2026-10-17 11:17:56,600 [INFO]: [en Epoch 6/15] Loss: 1.7483 | Val: 1.6580 (Elapsed: 13.1s)
+2026-10-17 11:17:58,718 [INFO]: [en Epoch 7/15] Loss: 1.7388 | Val: 1.6490 (Elapsed: 15.3s)
+2026-10-17 11:18:00,855 [INFO]: [en Epoch 8/15] Loss: 1.7316 | Val: 1.6435 (Elapsed: 17.4s)
+2026-10-17 11:18:02,962 [INFO]: [en Epoch 9/15] Loss: 1.7252 | Val: 1.6365 (Elapsed: 19.5s)
+2026-10-17 11:18:05,101 [INFO]: [en Epoch 10/15] Loss: 1.7198 | Val: 1.6333 (Elapsed: 21.6s)
+2026-10-17 11:18:07,264 [INFO]: [en Epoch 11/15] Loss: 1.7156 | Val: 1.6300 (Elapsed: 23.8s)
+2026-10-17 11:18:09,421 [INFO]: [en Epoch 12/15] Loss: 1.7119 | Val: 1.6281 (Elapsed: 26.0s)
+2026-10-17 11:18:11,539 [INFO]: [en Epoch 13/15] Loss: 1.7098 | Val: 1.6269 (Elapsed: 28.1s)
+2026-10-17 11:18:13,796 [INFO]: [en Epoch 14/15] Loss: 1.7079 | Val: 1.6256 (Elapsed: 30.3s)
+2026-10-17 11:18:15,890 [INFO]: [en Epoch 15/15] Loss: 1.7068 | Val: 1.6254 (Elapsed: 32.4s)
+2026-10-17 11:18:16,143 [INFO]: Saved NumPy weights: /tmp/switchlang_seedvar_1t_rc0x0/run5/gru0_en.npz (165.8 KB)
+2026-10-17 11:18:16,143 [INFO]: Saved metadata: /tmp/switchlang_seedvar_1t_rc0x0/run5/gru0_en.meta.json
+2026-10-17 11:18:16,145 [INFO]: Training he CharGRU (vocab_size=62, emb=32, hidden=96, drop=0.05, lr=0.0040) on 272875 words ...
+2026-10-17 11:18:18,500 [INFO]: [he Epoch 1/15] Loss: 2.4405 | Val: 2.3327 (Elapsed: 2.1s)
+2026-10-17 11:18:20,543 [INFO]: [he Epoch 2/15] Loss: 2.2495 | Val: 2.2704 (Elapsed: 4.2s)
+2026-10-17 11:18:22,622 [INFO]: [he Epoch 3/15] Loss: 2.2036 | Val: 2.2360 (Elapsed: 6.2s)
+2026-10-17 11:18:24,678 [INFO]: [he Epoch 4/15] Loss: 2.1813 | Val: 2.2264 (Elapsed: 8.3s)
+2026-10-17 11:18:26,738 [INFO]: [he Epoch 5/15] Loss: 2.1684 | Val: 2.2186 (Elapsed: 10.4s)
+2026-10-17 11:18:28,857 [INFO]: [he Epoch 6/15] Loss: 2.1599 | Val: 2.2075 (Elapsed: 12.5s)
+2026-10-17 11:18:30,932 [INFO]: [he Epoch 7/15] Loss: 2.1536 | Val: 2.2051 (Elapsed: 14.5s)
+2026-10-17 11:18:32,988 [INFO]: [he Epoch 8/15] Loss: 2.1489 | Val: 2.2040 (Elapsed: 16.6s)
+2026-10-17 11:18:35,198 [INFO]: [he Epoch 9/15] Loss: 2.1452 | Val: 2.2017 (Elapsed: 18.8s)
+2026-10-17 11:18:37,251 [INFO]: [he Epoch 10/15] Loss: 2.1416 | Val: 2.1947 (Elapsed: 20.9s)
+2026-10-17 11:18:39,286 [INFO]: [he Epoch 11/15] Loss: 2.1383 | Val: 2.1976 (Elapsed: 22.9s)
+2026-10-17 11:18:41,349 [INFO]: [he Epoch 12/15] Loss: 2.1358 | Val: 2.1947 (Elapsed: 25.0s)
+2026-10-17 11:18:43,399 [INFO]: [he Epoch 13/15] Loss: 2.1342 | Val: 2.1907 (Elapsed: 27.0s)
+2026-10-17 11:18:45,415 [INFO]: [he Epoch 14/15] Loss: 2.1329 | Val: 2.1926 (Elapsed: 29.0s)
+2026-10-17 11:18:47,418 [INFO]: [he Epoch 15/15] Loss: 2.1302 | Val: 2.1939 (Elapsed: 31.0s)
+2026-10-17 11:18:47,705 [INFO]: Saved NumPy weights: /tmp/switchlang_seedvar_1t_rc0x0/run5/gru1_he.npz (166.3 KB)
+2026-10-17 11:18:47,705 [INFO]: Saved metadata: /tmp/switchlang_seedvar_1t_rc0x0/run5/gru1_he.meta.json
+seed 5: Δ7.5   FP en 0.144 he 0.000 | FN en 1.080 he 1.648 cost 4.164 ±0.68 | med lat en 5.0 he 5.0 | val en 1.6254 he 2.1907
+2026-10-17 11:19:59,884 [INFO]: Training en CharGRU (vocab_size=61, emb=32, hidden=96, drop=0.05, lr=0.0040) on 275718 words ...
+2026-10-17 11:20:02,329 [INFO]: [en Epoch 1/15] Loss: 2.1353 | Val: 1.8502 (Elapsed: 2.2s)
+2026-10-17 11:20:04,596 [INFO]: [en Epoch 2/15] Loss: 1.8723 | Val: 1.7527 (Elapsed: 4.5s)
+2026-10-17 11:20:06,764 [INFO]: [en Epoch 3/15] Loss: 1.8108 | Val: 1.7098 (Elapsed: 6.7s)
+2026-10-17 11:20:08,978 [INFO]: [en Epoch 4/15] Loss: 1.7815 | Val: 1.6846 (Elapsed: 8.9s)
+2026-10-17 11:20:11,187 [INFO]: [en Epoch 5/15] Loss: 1.7636 | Val: 1.6717 (Elapsed: 11.1s)
+2026-10-17 11:20:13,328 [INFO]: [en Epoch 6/15] Loss: 1.7510 | Val: 1.6618 (Elapsed: 13.2s)
+2026-10-17 11:20:15,497 [INFO]: [en Epoch 7/15] Loss: 1.7427 | Val: 1.6545 (Elapsed: 15.4s)
+2026-10-17 11:20:17,700 [INFO]: [en Epoch 8/15] Loss: 1.7348 | Val: 1.6467 (Elapsed: 17.6s)
+2026-10-17 11:20:19,824 [INFO]: [en Epoch 9/15] Loss: 1.7285 | Val: 1.6404 (Elapsed: 19.7s)
+2026-10-17 11:20:22,077 [INFO]: [en Epoch 10/15] Loss: 1.7228 | Val: 1.6375 (Elapsed: 22.0s)
+2026-10-17 11:20:24,177 [INFO]: [en Epoch 11/15] Loss: 1.7185 | Val: 1.6336 (Elapsed: 24.1s)
+2026-10-17 11:20:26,294 [INFO]: [en Epoch 12/15] Loss: 1.7151 | Val: 1.6302 (Elapsed: 26.2s)
+2026-10-17 11:20:28,364 [INFO]: [en Epoch 13/15] Loss: 1.7131 | Val: 1.6291 (Elapsed: 28.3s)
+2026-10-17 11:20:30,463 [INFO]: [en Epoch 14/15] Loss: 1.7108 | Val: 1.6284 (Elapsed: 30.4s)
+2026-10-17 11:20:32,576 [INFO]: [en Epoch 15/15] Loss: 1.7100 | Val: 1.6281 (Elapsed: 32.5s)
+2026-10-17 11:20:32,812 [INFO]: Saved NumPy weights: /tmp/switchlang_seedvar_1t_rc0x0/run6/gru0_en.npz (165.9 KB)
+2026-10-17 11:20:32,812 [INFO]: Saved metadata: /tmp/switchlang_seedvar_1t_rc0x0/run6/gru0_en.meta.json
+2026-10-17 11:20:32,814 [INFO]: Training he CharGRU (vocab_size=62, emb=32, hidden=96, drop=0.05, lr=0.0040) on 272875 words ...
+2026-10-17 11:20:35,123 [INFO]: [he Epoch 1/15] Loss: 2.4473 | Val: 2.3485 (Elapsed: 2.1s)
+2026-10-17 11:20:37,176 [INFO]: [he Epoch 2/15] Loss: 2.2554 | Val: 2.2742 (Elapsed: 4.1s)
+2026-10-17 11:20:39,173 [INFO]: [he Epoch 3/15] Loss: 2.2045 | Val: 2.2389 (Elapsed: 6.1s)
+2026-10-17 11:20:41,163 [INFO]: [he Epoch 4/15] Loss: 2.1809 | Val: 2.2253 (Elapsed: 8.1s)
+2026-10-17 11:20:43,144 [INFO]: [he Epoch 5/15] Loss: 2.1670 | Val: 2.2193 (Elapsed: 10.1s)
+2026-10-17 11:20:45,123 [INFO]: [he Epoch 6/15] Loss: 2.1579 | Val: 2.2097 (Elapsed: 12.1s)
+2026-10-17 11:20:47,132 [INFO]: [he Epoch 7/15] Loss: 2.1508 | Val: 2.2038 (Elapsed: 14.1s)
+2026-10-17 11:20:49,120 [INFO]: [he Epoch 8/15] Loss: 2.1459 | Val: 2.2027 (Elapsed: 16.1s)
+2026-10-17 11:20:51,100 [INFO]: [he Epoch 9/15] Loss: 2.1417 | Val: 2.1923 (Elapsed: 18.1s)
+2026-10-17 11:20:53,093 [INFO]: [he Epoch 10/15] Loss: 2.1383 | Val: 2.1941 (Elapsed: 20.0s)
+2026-10-17 11:20:55,066 [INFO]: [he Epoch 11/15] Loss: 2.1360 | Val: 2.1970 (Elapsed: 22.0s)
+2026-10-17 11:20:57,077 [INFO]: [he Epoch 12/15] Loss: 2.1341 | Val: 2.1920 (Elapsed: 24.0s)
+2026-10-17 11:20:59,190 [INFO]: [he Epoch 13/15] Loss: 2.1318 | Val: 2.1902 (Elapsed: 26.1s)
+2026-10-17 11:21:01,199 [INFO]: [he Epoch 14/15] Loss: 2.1301 | Val: 2.1892 (Elapsed: 28.2s)
+2026-10-17 11:21:03,229 [INFO]: [he Epoch 15/15] Loss: 2.1284 | Val: 2.1923 (Elapsed: 30.2s)
+2026-10-17 11:21:03,523 [INFO]: Saved NumPy weights: /tmp/switchlang_seedvar_1t_rc0x0/run6/gru1_he.npz (166.4 KB)
+2026-10-17 11:21:03,523 [INFO]: Saved metadata: /tmp/switchlang_seedvar_1t_rc0x0/run6/gru1_he.meta.json
+seed 0: Δ10.5  FP en 0.021 he 0.000 | FN en 1.497 he 2.216 cost 3.919 ±0.41 | med lat en 6.0 he 7.0 | val en 1.6281 he 2.1892
+
+reference: Δ6     FP en 0.048 he 0.000 | FN en 1.347 he 1.448 cost 3.273 ±0.46 | med lat en 5.0 he 6.0
+cost across 6 seeds: mean 3.833 sd 0.364 min 3.121 max 4.164; mean Poisson ± 0.53
+FP en: mean 0.079 sd 0.057 range 0.007-0.144
+FP he: mean 0.000 sd 0.000 range 0.000-0.000
+FN en: mean 1.399 sd 0.217 range 1.080-1.709
+FN he: mean 1.648 sd 0.440 range 1.124-2.216
+seed 0 repeated identically: True (cost 3.9189 vs 3.9189, val en 1.628142 vs 1.628143)
