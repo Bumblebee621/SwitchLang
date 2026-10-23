@@ -1,22 +1,17 @@
 """
 blacklist.py — Foreground application polling and dynamic blacklist.
 
-Uses Windows APIs to detect the currently focused application and
-check it against a user-managed blacklist of executables.
+Uses the OS layer (core.osapi) to detect the currently focused application
+and check it against a user-managed blacklist of executables.
 """
 
-import ctypes
-import ctypes.wintypes as wintypes
 import json
 import logging
 import os
 
-user32 = ctypes.windll.user32
-kernel32 = ctypes.windll.kernel32
+from core import osapi
 
 logger = logging.getLogger('switchlang.blacklist')
-
-PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 DEFAULT_BLACKLIST = {
     'keepass.exe', 'keepassxc.exe', '1password.exe',
@@ -121,34 +116,7 @@ class BlacklistManager:
         Returns:
             The .exe filename (e.g. 'notepad.exe'), or '' on failure.
         """
-        hwnd = user32.GetForegroundWindow()
-        if not hwnd:
-            return ''
-
-        pid = wintypes.DWORD()
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-
-        if pid.value == 0:
-            return ''
-
-        h_process = kernel32.OpenProcess(
-            PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value
-        )
-        if not h_process:
-            return ''
-
-        try:
-            buf = ctypes.create_unicode_buffer(512)
-            size = wintypes.DWORD(512)
-            success = kernel32.QueryFullProcessImageNameW(
-                h_process, 0, buf, ctypes.byref(size)
-            )
-            if success:
-                full_path = buf.value
-                return os.path.basename(full_path).lower()
-            return ''
-        finally:
-            kernel32.CloseHandle(h_process)
+        return osapi.get_foreground_exe()
 
     def is_blacklisted(self):
         """Check if the current foreground app is blacklisted.

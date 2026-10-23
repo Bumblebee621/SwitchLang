@@ -1,63 +1,30 @@
 """
-hooks.py — Low-level keyboard hook (WH_KEYBOARD_LL) and mouse listener.
+hooks.py — Keystroke evaluation pipeline and context-resumption logic.
 
-This module is the "sensory system" of SwitchLang. It uses Windows Hooks to
-intercept every physical keystroke, processes them through an N-gram evaluation
-pipeline, and triggers layout corrections when gibberish is detected.
+This module is the "sensory system" of SwitchLang. It receives every physical
+keystroke from the OS layer (core/os_*.py, via core.osapi), processes it through
+an N-gram evaluation pipeline, and triggers layout corrections when gibberish
+is detected.
 
 KEY CONCEPTS:
-- Low-Level Hook: Intercepts keys before the OS or other apps see them.
+- OS hook: Lives in os_windows / os_linux / os_macos; reports each key to
+  HookManager._on_key before the OS or other apps see it.
 - Shadow Buffer: Keeps track of what the keys WOULD be in the other layout.
 - Context Resumption Event (CRE): Resets buffers and sensitivity when the
   user switches windows, clicks the mouse, or stays idle, signaling a "fresh start".
 """
 
-import ctypes
-import ctypes.wintypes as wintypes
 import collections
 import logging
 import threading
 import time
 
+from core import osapi
 from core.keymap import get_both_chars, vk_to_char
-from core.switcher import execute_switch, get_current_layout, GUITHREADINFO
+from core.switcher import execute_switch
 
 logger = logging.getLogger('switchlang.hooks')
 
-# =============================================================================
-# SECTION 1: WINDOWS API DEFINITIONS (ctypes)
-# =============================================================================
-
-# Dedicated user32 with use_last_error=True (separate from
-# ctypes.windll.user32 which may be modified by PyQt6)
-_user32 = ctypes.WinDLL('user32', use_last_error=True)
-
-# Also keep a reference for non-hook calls
-user32 = ctypes.windll.user32
-user32.GetForegroundWindow.restype = wintypes.HWND
-user32.GetKeyboardLayout.restype = wintypes.HKL
-
-kernel32 = ctypes.windll.kernel32
-kernel32.GetModuleHandleW.restype = wintypes.HMODULE
-kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
-
-# Hook constants
-WH_KEYBOARD_LL = 13
-WH_MOUSE_LL = 14
-WM_KEYDOWN = 0x0100
-WM_SYSKEYDOWN = 0x0104
-WM_QUIT = 0x0012
-HC_ACTION = 0
-
-# Mouse event constants
-WM_LBUTTONDOWN = 0x0201
-WM_RBUTTONDOWN = 0x0204
-WM_MBUTTONDOWN = 0x0207
-WM_XBUTTONDOWN = 0x020B
-
-# Flag to detect injected keys (bit 4 in KBDLLHOOKSTRUCT.flags)
-# We use this to avoid infinite loops when we re-inject corrected characters.
-LLKHF_INJECTED = 0x00000010
 
 # Virtual Key (VK) Constants
 VK_SHIFT = 0x10
@@ -87,97 +54,8 @@ _WordEntry = collections.namedtuple(
 )
 
 
-# Low-level hook callback type (WINFUNCTYPE = stdcall convention)
-HOOKPROC = ctypes.WINFUNCTYPE(
-    ctypes.c_long,
-    ctypes.c_int,
-    wintypes.WPARAM,
-    wintypes.LPARAM
-)
-
-# Set argtypes/restype for the Windows Hook functions
-_user32.SetWindowsHookExW.argtypes = [
-    ctypes.c_int, HOOKPROC, wintypes.HINSTANCE, wintypes.DWORD
-]
-_user32.SetWindowsHookExW.restype = wintypes.HHOOK
-
-_user32.CallNextHookEx.argtypes = [
-    wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM
-]
-_user32.CallNextHookEx.restype = ctypes.c_long
-
-_user32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
-_user32.UnhookWindowsHookEx.restype = wintypes.BOOL
-
-_user32.GetMessageW.argtypes = [
-    ctypes.POINTER(wintypes.MSG), wintypes.HWND,
-    wintypes.UINT, wintypes.UINT
-]
-_user32.GetMessageW.restype = wintypes.BOOL
-
-_user32.TranslateMessage.argtypes = [ctypes.POINTER(wintypes.MSG)]
-_user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
-
-_user32.PostThreadMessageW.argtypes = [
-    wintypes.DWORD, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM
-]
-_user32.PostThreadMessageW.restype = wintypes.BOOL
-
-
-def _post_quit(thread_id, max_retries=10, delay=0.05):
-    """Post WM_QUIT to a thread message queue, retrying if the queue isn't created yet."""
-    for _ in range(max_retries):
-        if _user32.PostThreadMessageW(thread_id, WM_QUIT, 0, 0):
-            return True
-        time.sleep(delay)
-    return False
-
-
-class KBDLLHOOKSTRUCT(ctypes.Structure):
-    """Low-level keyboard hook structure from Windows API."""
-    _fields_ = [
-        ('vkCode', wintypes.DWORD),
-        ('scanCode', wintypes.DWORD),
-        ('flags', wintypes.DWORD),
-        ('time', wintypes.DWORD),
-        ('dwExtraInfo', ctypes.POINTER(ctypes.c_ulong)),
-    ]
-
-
-_user32.GetGUIThreadInfo.argtypes = [wintypes.DWORD, ctypes.POINTER(GUITHREADINFO)]
-_user32.GetGUIThreadInfo.restype = wintypes.BOOL
-_user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
-_user32.GetWindowLongW.restype = wintypes.LONG
-
 # =============================================================================
-# SECTION 2: UI AUTOMATION HELPERS
-# =============================================================================
-
-def _is_caps_lock_on():
-    """Helper to check if Caps Lock is currently activated."""
-    return _user32.GetKeyState(VK_CAPITAL) & 1 == 1
-
-
-def is_password_field_active():
-    """Safety check: detects if the user is currently typing in a password field.
-    
-    Returns:
-        True if the currently focused window control has the ES_PASSWORD style.
-    """
-    gui_info = GUITHREADINFO(cbSize=ctypes.sizeof(GUITHREADINFO))
-    # 0 for the foreground thread
-    if _user32.GetGUIThreadInfo(0, ctypes.byref(gui_info)):
-        if gui_info.hwndFocus:
-            GWL_STYLE = -16
-            ES_PASSWORD = 0x0020
-            style = _user32.GetWindowLongW(gui_info.hwndFocus, GWL_STYLE)
-            if style & ES_PASSWORD:
-                return True
-    return False
-
-
-# =============================================================================
-# SECTION 3: MAIN HOOK MANAGER
+# SECTION 1: MAIN HOOK MANAGER
 # =============================================================================
 
 class HookManager:
@@ -219,12 +97,6 @@ class HookManager:
         # Buffer for keys the user types *while* the switch is happening.
         self.pending_queue = collections.deque(maxlen=100)
 
-        self._hook_id = None
-        self._hook_proc = None
-        self._hook_thread = None
-        self._mouse_hook_id = None
-        self._mouse_hook_proc = None
-        self._mouse_thread = None
         self._running = False
 
         self._shift_pressed = False
@@ -335,8 +207,7 @@ class HookManager:
                 if self._suspend_switch_layout:
                     target = 'he' if self._cached_layout == 'en' else 'en'
                     self._cached_layout = target
-                    from core.switcher import toggle_layout
-                    threading.Thread(target=toggle_layout, args=(target,), daemon=True).start()
+                    threading.Thread(target=osapi.toggle_layout, args=(target,), daemon=True).start()
                     logger.info('Layout switched to %s on suspend', target)
 
             if self._on_suspend_callback:
@@ -361,7 +232,7 @@ class HookManager:
     def _is_all_shift_word(self):
         """True if all letters in the current word were typed with Shift (and Caps Lock is off)."""
         return bool(
-            not _is_caps_lock_on()
+            not osapi.is_caps_lock_on()
             and self._letter_shift_history
             and all(s for _, s in self._letter_shift_history)
         )
@@ -445,7 +316,7 @@ class HookManager:
         """
         # 1. While a correction switch is happening, intercept and queue all typing.
         if self.is_correcting:
-            caps_lock = _is_caps_lock_on()
+            caps_lock = osapi.is_caps_lock_on()
             self.pending_queue.append((vk_code, self._shift_pressed, caps_lock))
             return True # Block keys so they don't interleave with correction injection.
 
@@ -518,7 +389,7 @@ class HookManager:
 
                 # When Hebrew layout + Caps Lock, screen shows English.
                 # Buffers already reflect this (set in step 5), so evaluate as English.
-                caps_lock = _is_caps_lock_on()
+                caps_lock = osapi.is_caps_lock_on()
                 effective_layout = 'en' if (current == 'he' and caps_lock) else current
 
                 should_switch, diff, is_colliding, is_ambiguous = self._evaluate_current(
@@ -552,7 +423,7 @@ class HookManager:
             return False
 
         # 5. Process Regular Character — TRIGGER TIER 2 EVALUATION (Mid-word)
-        caps_lock = _is_caps_lock_on()
+        caps_lock = osapi.is_caps_lock_on()
         en_char, he_char = get_both_chars(vk_code, self._shift_pressed, caps_lock)
         if en_char is None:
             return False
@@ -672,7 +543,6 @@ class HookManager:
             )
 
             # Drain pending_queue while locked so keystrokes typed during correction are not lost.
-            from core.switcher import send_string_as_keys, send_vk_key
             text_to_inject = ""
             consumed_items = []
             while self.pending_queue:
@@ -686,13 +556,13 @@ class HookManager:
                 else:
                     # Flush accumulated text first
                     if text_to_inject:
-                        send_string_as_keys(text_to_inject, target)
+                        osapi.send_string_as_keys(text_to_inject, target)
                         text_to_inject = ""
                     # Replay non-printable keys using explicit VK event
-                    send_vk_key(q_vk, shift=q_shift)
+                    osapi.send_vk_key(q_vk, shift=q_shift)
 
             if text_to_inject:
-                send_string_as_keys(text_to_inject, target)
+                osapi.send_string_as_keys(text_to_inject, target)
 
             # Integrate pending characters into the buffers so the engine
             # knows about the FULL word currently on screen.
@@ -729,131 +599,24 @@ class HookManager:
 
 
     # -------------------------------------------------------------------------
-    # SECTION 4: LOW-LEVEL HOOK ENGINE (Message Pumps & Threads)
+    # SECTION 2: OS KEY ENTRY, POLLING & LIFECYCLE
     # -------------------------------------------------------------------------
 
-    def _kb_hook_callback(self, n_code, w_param, l_param):
-        """The core WH_KEYBOARD_LL callback function.
-        
-        This is the most time-sensitive block of code in the entire application.
-        Failure to call NextHookEx quickly enough will lag the whole OS.
+    def _on_key(self, vk, is_down):
+        """Handle one physical key event from the OS layer.
+
+        Returns:
+            True to BLOCK the key from reaching the target application.
         """
-        try:
-            if n_code == HC_ACTION:
-                kb = ctypes.cast(
-                    l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)
-                ).contents
-
-                vk = kb.vkCode
-
-                # Important: Do not re-process keys we injected ourselves.
-                if kb.flags & LLKHF_INJECTED:
-                    return _user32.CallNextHookEx(
-                        self._hook_id, n_code, w_param, l_param
-                    )
-
-                is_down = w_param in (WM_KEYDOWN, WM_SYSKEYDOWN)
-                if vk in (VK_SHIFT, VK_LSHIFT, VK_RSHIFT):
-                    self._shift_pressed = is_down
-                elif vk in (VK_CONTROL, VK_LCONTROL, VK_RCONTROL):
-                    self._ctrl_pressed = is_down
-                elif vk in (VK_MENU, VK_LMENU, VK_RMENU):
-                    self._alt_pressed = is_down
-                elif is_down:
-                    # Check suspend hotkey before normal processing
-                    if not self._check_suspend_hotkey(vk):
-                        block = self._handle_keypress(vk)
-                        if block:
-                            return 1  # Stop the key from reaching the original app.
-        except Exception:
-            logger.exception('Error in keyboard hook callback')
-
-        # Always pass control to the next hook in the chain unless explicitly blocked.
-        return _user32.CallNextHookEx(
-            self._hook_id, n_code, w_param, l_param
-        )
-
-    def _hook_thread_func(self):
-        """Thread worker that installs the hook and maintains the Windows message pump."""
-        self._hook_proc = HOOKPROC(self._kb_hook_callback)
-        h_mod = kernel32.GetModuleHandleW(None)
-
-        self._hook_id = _user32.SetWindowsHookExW(
-            WH_KEYBOARD_LL,
-            self._hook_proc,
-            h_mod,
-            0
-        )
-
-        if not self._hook_id:
-            err = ctypes.get_last_error()
-            logger.error('Failed to install keyboard hook, error=%d', err)
-            return
-
-        logger.info('Keyboard hook installed (id=%s)', self._hook_id)
-
-        # The message pump is required for low-level hooks to receive events.
-        msg = wintypes.MSG()
-        while self._running:
-            result = _user32.GetMessageW(
-                ctypes.byref(msg), None, 0, 0
-            )
-            if result <= 0:
-                break
-            _user32.TranslateMessage(ctypes.byref(msg))
-            _user32.DispatchMessageW(ctypes.byref(msg))
-
-        _user32.UnhookWindowsHookEx(self._hook_id)
-        self._hook_id = None
-        logger.info('Keyboard hook removed')
-
-    def _mouse_hook_callback(self, n_code, w_param, l_param):
-        """Low-level mouse hook callback — triggers CRE on mouse clicks."""
-        try:
-            if n_code == HC_ACTION:
-                # Trigger on Left, Right, or X-button down (exclude middle click, matching previous behavior)
-                if w_param in (WM_LBUTTONDOWN, WM_RBUTTONDOWN, WM_XBUTTONDOWN):
-                    self._fire_cre('mouse_click')
-        except Exception:
-            logger.exception('Error in mouse hook callback')
-
-        return _user32.CallNextHookEx(
-            self._mouse_hook_id, n_code, w_param, l_param
-        )
-
-    def _mouse_thread_func(self):
-        """Thread worker that installs the mouse hook and maintains a Windows message pump."""
-        self._mouse_hook_proc = HOOKPROC(self._mouse_hook_callback)
-        h_mod = kernel32.GetModuleHandleW(None)
-
-        self._mouse_hook_id = _user32.SetWindowsHookExW(
-            WH_MOUSE_LL,
-            self._mouse_hook_proc,
-            h_mod,
-            0
-        )
-
-        if not self._mouse_hook_id:
-            err = ctypes.get_last_error()
-            logger.error('Failed to install mouse hook, error=%d', err)
-            return
-
-        logger.info('Mouse hook installed (id=%s)', self._mouse_hook_id)
-
-        msg = wintypes.MSG()
-        while self._running:
-            result = _user32.GetMessageW(
-                ctypes.byref(msg), None, 0, 0
-            )
-            if result <= 0:
-                break
-            _user32.TranslateMessage(ctypes.byref(msg))
-            _user32.DispatchMessageW(ctypes.byref(msg))
-
-        _user32.UnhookWindowsHookEx(self._mouse_hook_id)
-        self._mouse_hook_id = None
-        logger.info('Mouse hook removed')
-
+        if vk in (VK_SHIFT, VK_LSHIFT, VK_RSHIFT):
+            self._shift_pressed = is_down
+        elif vk in (VK_CONTROL, VK_LCONTROL, VK_RCONTROL):
+            self._ctrl_pressed = is_down
+        elif vk in (VK_MENU, VK_LMENU, VK_RMENU):
+            self._alt_pressed = is_down
+        elif is_down and not self._check_suspend_hotkey(vk):
+            return self._handle_keypress(vk)
+        return False
 
     def _poll_foreground_window(self):
         """Worker thread to poll OS state (Layout/Blacklist) every 100ms.
@@ -865,7 +628,7 @@ class HookManager:
             try:
                 # 1. Update Layout (Skip if mid-switch correction is happening)
                 if not self.is_correcting:
-                    new_layout = get_current_layout()
+                    new_layout = osapi.get_current_layout()
                     if new_layout != 'unknown':
                         if new_layout != self._cached_layout:
                             # Manual change detected? Trigger CRE.
@@ -878,14 +641,14 @@ class HookManager:
                 is_blacklisted = exe in self.blacklist.blacklisted
                 if not is_blacklisted:
                     try:
-                        is_blacklisted = is_password_field_active()
+                        is_blacklisted = osapi.is_password_field_active()
                     except Exception as e:
                         logger.debug('Error checking password field: %s', e)
                 self._cached_blacklisted = is_blacklisted
                 self._cached_is_ide_editor = self.blacklist.is_ide_editor(exe)
 
                 # 3. Detect Foreground Window changes (Trigger CRE)
-                hwnd = user32.GetForegroundWindow()
+                hwnd = osapi.get_foreground_window()
                 if self.sensitivity.check_window_change(hwnd):
                     self._fire_cre('window_change')
 
@@ -901,29 +664,16 @@ class HookManager:
             time.sleep(0.1)
 
     def start(self):
-        """Launch all listener threads (Keyboard, Mouse, OS Polling)."""
+        """Launch the OS hooks and the OS polling thread."""
         self._running = True
 
-        self._cached_layout = get_current_layout()
+        self._cached_layout = osapi.get_current_layout()
         logger.info('Initial layout: %s', self._cached_layout)
 
-        # Thread 1: The hot keyboard hook
-        self._hook_thread = threading.Thread(
-            target=self._hook_thread_func,
-            daemon=True,
-            name='KeyboardHookThread'
-        )
-        self._hook_thread.start()
+        # The hot keyboard hook and the mouse listener (synchronous, so a failure raises).
+        osapi.start_hooks(self._on_key, lambda: self._fire_cre('mouse_click'))
 
-        # Thread 2: Mouse listener (native Win32 WH_MOUSE_LL)
-        self._mouse_thread = threading.Thread(
-            target=self._mouse_thread_func,
-            daemon=True,
-            name='MouseHookThread'
-        )
-        self._mouse_thread.start()
-
-        # Thread 3: Slow poller for OS/UI context
+        # Slow poller for OS/UI context
         self._fg_thread = threading.Thread(
             target=self._poll_foreground_window,
             daemon=True,
@@ -935,17 +685,5 @@ class HookManager:
     def stop(self):
         """Safely dismantle all hooks and stop background threads."""
         self._running = False
-
-        if self._hook_thread and self._hook_thread.ident:
-            _post_quit(self._hook_thread.ident)
-
-        if self._mouse_thread and self._mouse_thread.ident:
-            _post_quit(self._mouse_thread.ident)
-
-        if self._hook_thread and self._hook_thread.is_alive():
-            self._hook_thread.join(timeout=2.0)
-
-        if self._mouse_thread and self._mouse_thread.is_alive():
-            self._mouse_thread.join(timeout=2.0)
-
+        osapi.stop_hooks()
         logger.info('All hooks stopped')
