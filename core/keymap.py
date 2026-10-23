@@ -87,6 +87,8 @@ def _build_char_to_vk():
 
 CHAR_TO_VK_EN, CHAR_TO_VK_HE = _build_char_to_vk()
 
+XKB_LAYOUT_LANG = {'us': 'en', 'gb': 'en', 'il': 'he'}  # XKB layout code → SwitchLang language
+
 
 def shadow(text, direction='en_to_he'):
     """Convert text from one layout to the other, character by character.
