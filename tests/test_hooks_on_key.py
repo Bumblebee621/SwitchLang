@@ -5,7 +5,7 @@ test_hooks_on_key.py — HookManager's OS-neutral key entry point.
 import unittest
 from unittest import mock
 
-from core.hooks import HookManager, VK_A, VK_LCONTROL, VK_LSHIFT
+from core.hooks import HookManager, VK_A, VK_LCONTROL, VK_LSHIFT, VK_LWIN
 from core.sensitivity import SensitivityManager
 
 
@@ -28,6 +28,11 @@ class TestOnKey(unittest.TestCase):
     def test_ctrl_a_clears_buffer(self):
         self.hm._on_key(VK_A, True)
         self.hm._on_key(VK_LCONTROL, True)
+        self.hm._on_key(VK_A, True)
+        self.assertEqual(self.hm.buffer_active, '')
+
+    def test_super_shortcut_is_not_buffered(self):
+        self.hm._on_key(VK_LWIN, True)
         self.hm._on_key(VK_A, True)
         self.assertEqual(self.hm.buffer_active, '')
 

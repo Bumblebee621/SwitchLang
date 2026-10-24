@@ -36,6 +36,8 @@ VK_RCONTROL = 0xA3
 VK_MENU = 0x12   # Alt
 VK_LMENU = 0xA4
 VK_RMENU = 0xA5
+VK_LWIN = 0x5B   # Super / Windows key
+VK_RWIN = 0x5C
 VK_RETURN = 0x0D
 VK_SPACE = 0x20
 VK_BACK = 0x08
@@ -102,6 +104,7 @@ class HookManager:
         self._shift_pressed = False
         self._ctrl_pressed = False
         self._alt_pressed = False
+        self._win_pressed = False
         self._letter_shift_history = []
 
         # PERFORMANCE optimization: Cache expensive Windows API results.
@@ -328,6 +331,9 @@ class HookManager:
             return False
 
         if self._cached_blacklisted:
+            return False
+
+        if self._win_pressed:  # Super+key is a desktop shortcut, not typing
             return False
 
         if self._ctrl_pressed:
@@ -614,6 +620,8 @@ class HookManager:
             self._ctrl_pressed = is_down
         elif vk in (VK_MENU, VK_LMENU, VK_RMENU):
             self._alt_pressed = is_down
+        elif vk in (VK_LWIN, VK_RWIN):
+            self._win_pressed = is_down
         elif is_down and not self._check_suspend_hotkey(vk):
             return self._handle_keypress(vk)
         return False
@@ -670,7 +678,8 @@ class HookManager:
         self._cached_layout = osapi.get_current_layout()
         logger.info('Initial layout: %s', self._cached_layout)
 
-        # The hot keyboard hook and the mouse listener (synchronous, so a failure raises).
+        # The hot keyboard hook and the mouse listener. May raise on Linux/macOS;
+        # on Windows, install failures are logged in the hook thread.
         osapi.start_hooks(self._on_key, lambda: self._fire_cre('mouse_click'))
 
         # Slow poller for OS/UI context
