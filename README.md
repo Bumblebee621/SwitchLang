@@ -79,25 +79,24 @@ To uninstall, run `./install.sh --uninstall`.
 
 ### NixOS
 
-Put the rule in your configuration instead of copying the file:
+Put the rule in your configuration instead of copying the file. Use `services.udev.packages`, not `services.udev.extraRules`: extraRules becomes `99-local.rules`, which runs after systemd's `73-seat-late.rules` applies the `uaccess` tag, so the tag would have no effect.
 
 ```nix
-services.udev.extraRules = ''
-# Give the active local session access to keyboards, pointers and /dev/uinput
-# (logind "uaccess" ACLs), so SwitchLang runs as the user, not root. The 70-
-# prefix must sort before systemd's 73-seat-late.rules, which applies the tag.
-SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_KEYBOARD}=="1", TAG+="uaccess"
-SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_MOUSE}=="1", TAG+="uaccess"
-SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TOUCHPAD}=="1", TAG+="uaccess"
-SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TOUCHSCREEN}=="1", TAG+="uaccess"
-SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TABLET}=="1", TAG+="uaccess"
-SUBSYSTEM=="misc", KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"
-'';
+services.udev.packages = [
+  (pkgs.writeTextDir "lib/udev/rules.d/70-switchlang.rules" ''
+    SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_KEYBOARD}=="1", TAG+="uaccess"
+    SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_MOUSE}=="1", TAG+="uaccess"
+    SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TOUCHPAD}=="1", TAG+="uaccess"
+    SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TOUCHSCREEN}=="1", TAG+="uaccess"
+    SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TABLET}=="1", TAG+="uaccess"
+    SUBSYSTEM=="misc", KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"
+  '')
+];
 ```
 
 ### keyd
 
-If you use keyd, exclude SwitchLang's virtual keyboard from it by adding `ids = * -5357:4c47` to your keyd config.
+If you use keyd, exclude SwitchLang's virtual keyboard from it by adding `-5357:4c47` under `[ids]`, after `*`, in your keyd config (NixOS: `ids = [ "*" "-5357:4c47" ];`).
 
 ### Security
 
