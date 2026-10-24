@@ -55,7 +55,7 @@ Supported desktops: Hyprland, GNOME (Wayland or X11), and other X11 desktops.
 
 - A distro at least as new as Ubuntu 22.04 (glibc 2.35+).
 - English (US) and Hebrew input sources configured.
-- On GNOME, a "switch input source" shortcut. The default (Super+Space) works, and so does Alt+Shift.
+- On GNOME, a "switch input source" shortcut. The default (Super+Space) works; Alt+Shift should also work (untested).
 - A tray: Ubuntu shows it through its built-in AppIndicator extension. Vanilla GNOME needs that extension installed.
 
 ### Install
@@ -65,6 +65,8 @@ Supported desktops: Hyprland, GNOME (Wayland or X11), and other X11 desktops.
 3. Enter your sudo password once when asked.
 
 SwitchLang starts right away (tray icon), appears in the app menu, and starts on login. `install.sh` copies a single self-contained binary to `~/.local/share/switchlang/` (no Python needed), adds the menu and autostart entries, installs the udev rule with sudo, and reloads udev.
+
+On Hyprland without uwsm or dex, autostart entries are ignored: add `exec-once = ~/.local/bin/switchlang` to `hyprland.conf` instead.
 
 To uninstall, run `./install.sh --uninstall`.
 
@@ -81,11 +83,14 @@ Put the rule in your configuration instead of copying the file:
 
 ```nix
 services.udev.extraRules = ''
-# Give the active local session access to keyboards, mice and /dev/uinput
+# Give the active local session access to keyboards, pointers and /dev/uinput
 # (logind "uaccess" ACLs), so SwitchLang runs as the user, not root. The 70-
 # prefix must sort before systemd's 73-seat-late.rules, which applies the tag.
 SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_KEYBOARD}=="1", TAG+="uaccess"
 SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_MOUSE}=="1", TAG+="uaccess"
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TOUCHPAD}=="1", TAG+="uaccess"
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TOUCHSCREEN}=="1", TAG+="uaccess"
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TABLET}=="1", TAG+="uaccess"
 SUBSYSTEM=="misc", KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"
 '';
 ```
@@ -94,10 +99,14 @@ SUBSYSTEM=="misc", KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinpu
 
 If you use keyd, exclude SwitchLang's virtual keyboard from it by adding `ids = * -5357:4c47` to your keyd config.
 
+### Security
+
+The udev rule lets any program you run read the keyboards and inject keys through `/dev/uinput`; that is the cost of not running SwitchLang as root. Unlike Windows, where the lock screen and admin prompts are out of reach, on Linux SwitchLang also sees what you type on the lock screen and in polkit or sudo password prompts. Typed text stays in memory and is never sent anywhere; it reaches disk only if you turn on debug logging, which logs corrected words.
+
 ### Limits
 
 - No password-field detection.
-- Keyboards plugged in after SwitchLang starts aren't watched.
+- Keyboards that connect later (plugging in, Bluetooth, resume from suspend) are picked up automatically. If the log says they won't be watched, restart SwitchLang after connecting one.
 - On GNOME Wayland, per-app blacklists don't apply.
 - IBus and fcitx5 input methods aren't supported.
 
