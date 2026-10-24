@@ -45,6 +45,36 @@ class TestGnome(unittest.TestCase):
         self.assertEqual(pressed, [(125, 1), (57, 1), (57, 0), (125, 0)])
         self.assertEqual(desktop_gnome.get_layout(), 'en')
 
+    def test_shift_alt_accelerator(self):
+        self.settings['switch-input-source'] = ['<Shift>Alt_L']
+        self.assertEqual(desktop_gnome._shortcut_keys(), [42, 56])
+
+    def test_unmappable_first_accelerator_falls_through(self):
+        self.settings['switch-input-source'] = ['XF86Keyboard', '<Super>space']
+        self.assertEqual(desktop_gnome._shortcut_keys(), [125, 57])
+
+    def test_mod4_accelerator(self):
+        self.settings['switch-input-source'] = ['<Mod4>space']
+        self.assertEqual(desktop_gnome._shortcut_keys(), [125, 57])
+
+    def test_no_usable_shortcut_raises_runtime_error(self):
+        self.settings['switch-input-source'] = []
+        with self.assertRaises(RuntimeError):
+            desktop_gnome._shortcut_keys()
+
+    def test_prepare_passes_with_us_and_il(self):
+        desktop_gnome.prepare()
+
+    def test_prepare_raises_without_shortcut(self):
+        self.settings['switch-input-source'] = []
+        with self.assertRaises(RuntimeError):
+            desktop_gnome.prepare()
+
+    def test_prepare_raises_without_hebrew_source(self):
+        self.settings['sources'] = [('xkb', 'us')]
+        with self.assertRaises(RuntimeError):
+            desktop_gnome.prepare()
+
 
 if __name__ == '__main__':
     unittest.main()

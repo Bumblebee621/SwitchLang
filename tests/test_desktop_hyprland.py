@@ -40,6 +40,16 @@ class TestHyprland(unittest.TestCase):
         with self._ipc([MAIN]):
             self.assertEqual(desktop_hyprland.active_window(), (None, 0))
 
+    def test_prepare_raises_without_hebrew_layout(self):
+        us_only = dict(MAIN, layout='us')
+        with self._ipc([us_only]):
+            with self.assertRaises(RuntimeError):
+                desktop_hyprland.prepare()
+
+    def test_prepare_passes_with_us_and_il(self):
+        with self._ipc([MAIN]):
+            desktop_hyprland.prepare()
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -17,6 +17,10 @@ class TestX11(unittest.TestCase):
         desktop_x11.set_layout('en')
         self.assertEqual(desktop_x11.get_layout(), 'en')
 
+    def test_prepare_passes_with_us_and_il(self):
+        from core import desktop_x11
+        desktop_x11.prepare()
+
     def test_no_window_manager_means_no_active_window(self):
         from core import desktop_x11
         self.assertEqual(desktop_x11.active_window(), (0, 0))

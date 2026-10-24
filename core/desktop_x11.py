@@ -75,6 +75,12 @@ def set_layout(target):
         time.sleep(0.01)
 
 
+def prepare():
+    """Raise RuntimeError at startup if the XKB layouts lack en/he."""
+    if not {'en', 'he'} <= set(_layout_langs()):
+        raise RuntimeError('SwitchLang needs both "us" and "il" XKB layouts (setxkbmap -query shows the current ones).')
+
+
 def _property(window, name):
     """First 32-bit item of a window property, or 0."""
     kind, fmt, count, after = ctypes.c_ulong(), ctypes.c_int(), ctypes.c_ulong(), ctypes.c_ulong()

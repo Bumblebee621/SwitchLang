@@ -50,6 +50,12 @@ def set_layout(target):
         time.sleep(0.01)
 
 
+def prepare():
+    """Raise RuntimeError at startup if the keyboard lacks the en/he layouts."""
+    if not {'en', 'he'} <= set(_langs(_keyboard())):
+        raise RuntimeError('SwitchLang needs both "us" and "il" in Hyprland\'s input:kb_layout.')
+
+
 def active_window():
     """(window address, pid) of the focused window; (None, 0) if nothing has focus."""
     window = json.loads(_ipc('j/activewindow'))

@@ -160,6 +160,7 @@ def start_hooks(on_key, on_click):
     global _uinput, _on_key, _on_click, _running, _reader, _caps_lock
     if desktop is None:
         raise RuntimeError('SwitchLang on Linux needs a Hyprland, GNOME or X11 session.')
+    desktop.prepare()  # RuntimeError here reaches the startup dialog, before any word is erased
     _on_key, _on_click = on_key, on_click
     try:
         _uinput = _create_uinput()
