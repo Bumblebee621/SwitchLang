@@ -5,6 +5,7 @@ updater.py — Logic for checking and downloading updates from GitHub.
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import urllib.request
 from core import __version__
@@ -18,6 +19,7 @@ def check_for_updates():
     Checks GitHub for a newer version.
     Returns: (new_version_string, download_url) if higher version exists, else (None, None).
     """
+    if sys.platform != 'win32': return None, None  # only the Windows installer self-updates
     try:
         req = urllib.request.Request(GITHUB_API_URL, headers={"User-Agent": _USER_AGENT})
         with urllib.request.urlopen(req, timeout=10) as response:

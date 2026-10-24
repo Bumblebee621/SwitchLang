@@ -17,7 +17,7 @@ SwitchLang runs in the system tray, intercepts keystrokes, and automatically det
 
 ## Requirements
 
-- Windows 10 or Windows 11
+- Windows 10 or Windows 11, or Linux (see [Linux](#linux))
 - English (US) and Hebrew (Standard) keyboard layouts installed
 - Python 3.10+ (only required if running from source)
 
@@ -46,6 +46,60 @@ python main.py
 ```
 
 Access settings by right-clicking the SwitchLang tray icon.
+
+## Linux
+
+Supported desktops: Hyprland, GNOME (Wayland or X11), and other X11 desktops.
+
+### Requirements
+
+- A distro at least as new as Ubuntu 22.04 (glibc 2.35+).
+- English (US) and Hebrew input sources configured.
+- On GNOME, a "switch input source" shortcut. The default (Super+Space) works, and so does Alt+Shift.
+- A tray: Ubuntu shows it through its built-in AppIndicator extension. Vanilla GNOME needs that extension installed.
+
+### Install
+
+1. Download `SwitchLang-linux-x86_64.tar.gz` from the [GitHub Releases](https://github.com/Bumblebee621/SwitchLang/releases) page.
+2. Run `tar xf SwitchLang-linux-x86_64.tar.gz && cd SwitchLang && ./install.sh`
+3. Enter your sudo password once when asked.
+
+SwitchLang starts right away (tray icon), appears in the app menu, and starts on login. `install.sh` copies a single self-contained binary to `~/.local/share/switchlang/` (no Python needed), adds the menu and autostart entries, installs the udev rule with sudo, and reloads udev.
+
+To uninstall, run `./install.sh --uninstall`.
+
+### Running from source
+
+1. `pip install -r requirements.txt`
+2. Copy `installers/linux/70-switchlang.rules` to `/etc/udev/rules.d/`, then run `sudo udevadm control --reload && sudo udevadm trigger`.
+3. Log out and back in (the rule grants access to the active session).
+4. `python main.py`
+
+### NixOS
+
+Put the rule in your configuration instead of copying the file:
+
+```nix
+services.udev.extraRules = ''
+# Give the active local session access to keyboards, mice and /dev/uinput
+# (logind "uaccess" ACLs), so SwitchLang runs as the user, not root. The 70-
+# prefix must sort before systemd's 73-seat-late.rules, which applies the tag.
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_KEYBOARD}=="1", TAG+="uaccess"
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_MOUSE}=="1", TAG+="uaccess"
+SUBSYSTEM=="misc", KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"
+'';
+```
+
+### keyd
+
+If you use keyd, exclude SwitchLang's virtual keyboard from it by adding `ids = * -5357:4c47` to your keyd config.
+
+### Limits
+
+- No password-field detection.
+- Keyboards plugged in after SwitchLang starts aren't watched.
+- On GNOME Wayland, per-app blacklists don't apply.
+- IBus and fcitx5 input methods aren't supported.
 
 ## License
 

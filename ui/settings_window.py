@@ -4,6 +4,7 @@ settings_window.py — Main settings dialog with General and Blacklist tabs.
 
 import json
 import os
+import sys
 from PyQt6.QtWidgets import (
     QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QCheckBox, QSlider, QPushButton, QLineEdit,
@@ -13,6 +14,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread
 from PyQt6.QtGui import QFont, QIcon, QKeyEvent
 
+from core import osapi
 from core.startup import is_startup_enabled, set_startup_enabled
 from core.updater import check_for_updates, download_and_install
 
@@ -699,7 +701,7 @@ class SettingsWindow(QMainWindow):
             vks.append(VK_MENU)
         
         # Map the primary key using native virtual key (layout-independent on Windows)
-        vk = event.nativeVirtualKey()
+        vk = osapi.native_key_to_vk(event)
         if vk:
             vks.append(vk)
         else:
@@ -717,7 +719,7 @@ class SettingsWindow(QMainWindow):
         """Generic helper to add an exe name to a manager list."""
         exe = input_widget.text().strip()
         if exe:
-            if not exe.lower().endswith('.exe'):
+            if sys.platform == 'win32' and not exe.lower().endswith('.exe'):
                 exe += '.exe'
             add_fn(exe)
             refresh_fn()

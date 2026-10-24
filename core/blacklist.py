@@ -15,7 +15,9 @@ logger = logging.getLogger('switchlang.blacklist')
 
 DEFAULT_BLACKLIST = {
     'keepass.exe', 'keepassxc.exe', '1password.exe',
-    'bitwarden.exe', 'credentialuibroker.exe', 'consent.exe'
+    'bitwarden.exe', 'credentialuibroker.exe', 'consent.exe',
+    # Linux (as /proc/<pid>/comm reports them)
+    'keepassxc', '1password', 'bitwarden'
 }
 
 IDE_EXECUTABLES = {
@@ -29,6 +31,9 @@ IDE_EXECUTABLES = {
     'code.exe', 'insiders.exe', 'devenv.exe',
     # Editors
     'vim.exe', 'gvim.exe', 'nvim.exe', 'nvim-qt.exe',
+    # Linux (as /proc/<pid>/comm reports them)
+    'code', 'codium', 'pycharm', 'idea', 'webstorm', 'clion', 'goland', 'rider',
+    'studio', 'nvim-qt', 'gvim', 'zed', 'kate',
     # Others
     'eclipse.exe', 'netbeans64.exe', 'netbeans.exe',
     'codeblocks.exe', 'qtcreator.exe', 'spyder.exe',

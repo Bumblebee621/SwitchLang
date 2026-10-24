@@ -13,8 +13,9 @@ import sys
 import ctypes
 import signal
 
-# Global handle for the single-instance mutex
+# Global handle for the single-instance mutex (Windows) / lock file (Linux, macOS)
 _mutex_handle = None
+_lock_file = None
 
 # Configure PyInstaller paths
 BUNDLE_DIR = sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
@@ -62,7 +63,7 @@ def set_debug_mode(enabled):
 
 
 from PyQt6.QtCore import QDir, QTimer
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from core.quadgram import load_models
 from core.engine import EvaluationEngine
@@ -98,24 +99,34 @@ def on_settings_changed(config_data, hook_manager):
 
 def main():
     """Application entry point."""
-    # Prevent multiple instances using a named Windows Mutex (session-specific)
-    mutex_name = "Local\\SwitchLang_Mutex_v1"
-    ERROR_ALREADY_EXISTS = 183
+    if sys.platform == 'win32':
+        # Prevent multiple instances using a named Windows Mutex (session-specific)
+        mutex_name = "Local\\SwitchLang_Mutex_v1"
+        ERROR_ALREADY_EXISTS = 183
 
-    global _mutex_handle
-    _mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_name)
-    last_error = ctypes.windll.kernel32.GetLastError()
+        global _mutex_handle
+        _mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_name)
+        last_error = ctypes.windll.kernel32.GetLastError()
 
-    if last_error == ERROR_ALREADY_EXISTS:
-        print("SwitchLang is already running.")
-        sys.exit(0)
+        if last_error == ERROR_ALREADY_EXISTS:
+            print("SwitchLang is already running.")
+            sys.exit(0)
 
-    # Set AppUserModelID so Windows taskbar groups windows by this ID instead of python.exe
-    try:
-        myappid = 'Bumblebee621.SwitchLang.v1'
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-    except Exception:
-        pass
+        # Set AppUserModelID so Windows taskbar groups windows by this ID instead of python.exe
+        try:
+            myappid = 'Bumblebee621.SwitchLang.v1'
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        except Exception:
+            pass
+    else:
+        import fcntl
+        global _lock_file
+        _lock_file = open(os.path.join(os.environ.get('XDG_RUNTIME_DIR', '/tmp'), 'switchlang.lock'), 'w')
+        try:
+            fcntl.flock(_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("SwitchLang is already running.")
+            sys.exit(0)
 
     config = load_config()
 
@@ -171,7 +182,11 @@ def main():
     # UI Notifications from Hooks
     hook_manager.set_on_suspend_callback(tray.notify_suspension)
 
-    hook_manager.start()
+    try:
+        hook_manager.start()
+    except (OSError, RuntimeError) as exc:
+        QMessageBox.critical(None, 'SwitchLang', str(exc))
+        sys.exit(1)
 
     # Handle Ctrl+C gracefully
     def handle_sigint(sig, frame):
@@ -196,7 +211,7 @@ def main():
 
     hook_manager.stop()
 
-    if _mutex_handle:
+    if sys.platform == 'win32' and _mutex_handle:
         ctypes.windll.kernel32.CloseHandle(_mutex_handle)
 
     sys.exit(exit_code)
