@@ -39,16 +39,18 @@ __all__ = [
 logger = logging.getLogger('switchlang.os')
 
 # linux/input.h, linux/uinput.h (64-bit)
-EV_SYN, EV_KEY = 0, 1
+EV_SYN, EV_KEY, EV_LED = 0, 1, 0x11
 _EV = struct.Struct('llHHi')  # struct input_event
 _SYN = _EV.pack(0, 0, EV_SYN, 0, 0)
 EVIOCGRAB = 0x40044590
 EVIOCGKEY = 0x80604518  # 96-byte bitmap of keys currently down
-UI_SET_EVBIT, UI_SET_KEYBIT = 0x40045564, 0x40045565
+UI_SET_EVBIT, UI_SET_KEYBIT, UI_SET_LEDBIT = 0x40045564, 0x40045565, 0x40045569
 UI_DEV_CREATE, UI_DEV_DESTROY = 0x5501, 0x5502
+LED_NUML, LED_CAPSL, LED_SCROLLL = 0, 1, 2
 KEY_BACKSPACE, KEY_LEFTSHIFT, KEY_A, KEY_SPACE, KEY_CAPSLOCK = 14, 42, 30, 57, 58
-BTN_LEFT = 0x110
-_CLICK_BUTTONS = {0x110, 0x111, 0x113, 0x114}  # left, right, side, extra; middle excluded as on Windows
+BTN_LEFT, BTN_TOUCH = 0x110, 0x14A
+# left, right, side, extra, touch; middle excluded as on Windows
+_CLICK_BUTTONS = {0x110, 0x111, 0x113, 0x114, 0x14A}
 
 # The fixed id lets remappers that grab every keyboard exclude ours
 # (keyd: ids = * -5357:4c47), or injected keys would loop back to us.
@@ -74,10 +76,17 @@ _EVDEV_TO_VK.update({
     105: 0x25, 103: 0x26, 106: 0x27, 108: 0x28, 110: 0x2D, 111: 0x2E,  # ← ↑ → ↓ Ins Del
     42: 0xA0, 54: 0xA1, 29: 0xA2, 97: 0xA3, 56: 0xA4, 100: 0xA5, 125: 0x5B,  # Shift Ctrl Alt Super
 })
-_VK_TO_EVDEV = {vk: code for code, vk in _EVDEV_TO_VK.items()} | {0x10: 42, 0x11: 29, 0x12: 56}
+_EVDEV_TO_VK.update({
+    82: 0x60, 79: 0x61, 80: 0x62, 81: 0x63, 75: 0x64, 76: 0x65, 77: 0x66, 71: 0x67, 72: 0x68, 73: 0x69,  # KP0-KP9
+    55: 0x6A, 78: 0x6B, 74: 0x6D, 83: 0x6E, 98: 0x6F,                  # KP* + - . /
+    96: 0x0D,                                                          # KP Enter = VK_RETURN
+})
+# KP Enter (96) shares VK_RETURN with main Enter (28); skip it so main Enter wins the reverse map.
+_VK_TO_EVDEV = {vk: code for code, vk in _EVDEV_TO_VK.items() if code != 96} | {0x10: 42, 0x11: 29, 0x12: 56}
 
 _keyboards, _pointers = {}, {}  # fd -> /dev/input path
 _uinput = None
+_caps_lock = False  # mirrors the Caps Lock LED; updated from uinput LED events
 _emit_lock = threading.Lock()
 _reader = None
 _running = False
@@ -103,7 +112,7 @@ def _devices():
         path = f'/dev/input/{os.path.basename(sys_dir)}'
         if keys >> KEY_A & 1 and keys >> KEY_SPACE & 1:
             keyboards.append(path)
-        elif keys >> BTN_LEFT & 1:
+        elif keys >> BTN_LEFT & 1 or keys >> BTN_TOUCH & 1:  # mouse, touchpad, touchscreen
             pointers.append(path)
     return keyboards, pointers
 
@@ -125,8 +134,12 @@ def _wait_for_keys_released(fd, timeout=5.0):
 
 
 def _create_uinput():
-    fd = os.open('/dev/uinput', os.O_WRONLY | os.O_NONBLOCK)
+    # O_RDWR: we also read the LED events the desktop writes back to this device.
+    fd = os.open('/dev/uinput', os.O_RDWR | os.O_NONBLOCK)
     fcntl.ioctl(fd, UI_SET_EVBIT, EV_KEY)
+    fcntl.ioctl(fd, UI_SET_EVBIT, EV_LED)
+    for led in (LED_NUML, LED_CAPSL, LED_SCROLLL):
+        fcntl.ioctl(fd, UI_SET_LEDBIT, led)
     for code in range(1, 256):
         fcntl.ioctl(fd, UI_SET_KEYBIT, code)
     # Legacy struct uinput_user_dev: name, input_id (BUS_USB), ff_effects_max, 4 x 64 abs ints.
@@ -144,7 +157,7 @@ _PERMISSION_HELP = ('SwitchLang needs access to the keyboard (/dev/input) and to
 
 
 def start_hooks(on_key, on_click):
-    global _uinput, _on_key, _on_click, _running, _reader
+    global _uinput, _on_key, _on_click, _running, _reader, _caps_lock
     if desktop is None:
         raise RuntimeError('SwitchLang on Linux needs a Hyprland, GNOME or X11 session.')
     _on_key, _on_click = on_key, on_click
@@ -152,6 +165,7 @@ def start_hooks(on_key, on_click):
         _uinput = _create_uinput()
     except PermissionError as exc:
         raise PermissionError(_PERMISSION_HELP) from exc
+    _caps_lock = _read_caps_lock_sysfs()  # once, before grabbing; LED events keep it current after
 
     keyboards, pointers = _devices()
     for path in pointers:
@@ -195,21 +209,56 @@ def stop_hooks():
 def _read_loop():
     # ponytail: devices are found once at start; a keyboard plugged in later is
     # typed through normally but not watched. Rescan in the poll thread if needed.
-    while _running:
-        for fd in select.select([*_keyboards, *_pointers], [], [], 0.5)[0]:
+    try:
+        while _running:
             try:
-                data = os.read(fd, _EV.size * 64)
-            except OSError:  # unplugged
-                logger.info('Input device gone: %s', _keyboards.pop(fd, None) or _pointers.pop(fd, None))
-                os.close(fd)
+                ready = select.select([*_keyboards, *_pointers, _uinput], [], [], 0.5)[0]
+            except Exception:  # e.g. a closed fd; back off instead of spinning
+                logger.exception('Error handling input event')
+                time.sleep(0.5)
                 continue
-            for _, _, ev_type, code, value in _EV.iter_unpack(data):
-                if ev_type != EV_KEY:
-                    continue  # _emit writes its own SYN after every key
-                if fd in _keyboards:
-                    _on_keyboard_event(code, value)
-                elif value == 1 and code in _CLICK_BUTTONS:
-                    _on_click()
+            for fd in ready:
+                try:
+                    data = os.read(fd, _EV.size * 64)
+                except OSError:  # unplugged
+                    if fd == _uinput:
+                        continue
+                    logger.info('Input device gone: %s', _keyboards.pop(fd, None) or _pointers.pop(fd, None))
+                    os.close(fd)
+                    continue
+                try:
+                    for _, _, ev_type, code, value in _EV.iter_unpack(data):
+                        if fd == _uinput:
+                            if ev_type == EV_LED:
+                                _on_led_event(code, value)
+                        elif ev_type != EV_KEY:
+                            continue  # _emit writes its own SYN after every key
+                        elif fd in _keyboards:
+                            _on_keyboard_event(code, value)
+                        elif value == 1 and code in _CLICK_BUTTONS:
+                            _on_click()
+                except Exception:
+                    logger.exception('Error handling input event')  # keep the reader alive
+    finally:
+        # Reader gone (stop or crash): hand the keyboards back so keys reach the desktop.
+        for fd in _keyboards:
+            try:
+                fcntl.ioctl(fd, EVIOCGRAB, 0)
+            except OSError:
+                pass
+
+
+def _on_led_event(code, value):
+    """The desktop writes LED state to our uinput device; keep Caps Lock current and
+    pass the LED on to the grabbed keyboards so their lights follow."""
+    global _caps_lock
+    if code == LED_CAPSL:
+        _caps_lock = bool(value)
+    for fd in _keyboards:
+        try:
+            os.write(fd, _EV.pack(0, 0, EV_LED, code, value) + _SYN)
+        except OSError:
+            pass
 
 
 def _on_keyboard_event(code, value):
@@ -283,13 +332,18 @@ def send_vk_key(vk, shift=False):
 
 # ----- State queries -------------------------------------------------------------
 
-def is_caps_lock_on():
-    """The desktop mirrors Caps Lock onto every keyboard's LED; sysfs exposes them without privileges."""
+def _read_caps_lock_sysfs():
+    """Caps Lock LED state from sysfs. Only read once, at start: grabbed keyboards
+    drop the desktop's LED writes, so later changes come in as uinput LED events."""
     for path in glob.glob('/sys/class/leds/input*::capslock/brightness'):
         with open(path) as f:
             if f.read().strip() != '0':
                 return True
     return False
+
+
+def is_caps_lock_on():
+    return _caps_lock
 
 
 def is_password_field_active():
