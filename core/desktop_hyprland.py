@@ -19,6 +19,7 @@ _OWN_KEYBOARD = 'switchlang-virtual-keyboard'
 
 def _ipc(command):
     with socket.socket(socket.AF_UNIX) as s:
+        s.settimeout(1)  # a stalled reply must not freeze the switch thread mid-correction
         s.connect(_SOCKET)
         s.sendall(command.encode())
         reply = b''
@@ -29,8 +30,10 @@ def _ipc(command):
 
 def _keyboard():
     keyboards = json.loads(_ipc('j/devices'))['keyboards']
-    own = [k for k in keyboards if k['name'] == _OWN_KEYBOARD]
-    return (own or [k for k in keyboards if k['main']])[0]
+    matches = [k for k in keyboards if k['name'] == _OWN_KEYBOARD] or [k for k in keyboards if k['main']]
+    if not matches:
+        raise RuntimeError('Hyprland reports no keyboard')
+    return matches[0]
 
 
 def _langs(keyboard):
