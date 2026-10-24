@@ -15,6 +15,7 @@ import logging
 import os
 import select
 import struct
+import sys
 import threading
 import time
 
@@ -94,6 +95,18 @@ _on_key = _on_click = None
 
 
 # ----- Devices ---------------------------------------------------------------
+
+def host_env():
+    """Environment for running system tools. A PyInstaller one-file build points
+    LD_LIBRARY_PATH at its bundled libraries (keeping the original in
+    LD_LIBRARY_PATH_ORIG); child processes must get the system's back."""
+    env = dict(os.environ)
+    if 'LD_LIBRARY_PATH_ORIG' in env:
+        env['LD_LIBRARY_PATH'] = env.pop('LD_LIBRARY_PATH_ORIG')
+    elif getattr(sys, 'frozen', False):
+        env.pop('LD_LIBRARY_PATH', None)
+    return env
+
 
 def _bitmap(text):
     """Parse a sysfs capability bitmap (64-bit hex words, most significant first)."""

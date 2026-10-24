@@ -32,7 +32,8 @@ def _parse(text):
 
 def _gsettings(schema, key):
     # ponytail: one process per call (~5 ms) from the 100 ms poll; `gsettings monitor` could push changes.
-    return _parse(subprocess.run(['gsettings', 'get', schema, key],
+    from core.os_linux import host_env  # os_linux imports this module; import at call time
+    return _parse(subprocess.run(['gsettings', 'get', schema, key], env=host_env(),
                                  capture_output=True, text=True, check=True, timeout=2).stdout)
 
 

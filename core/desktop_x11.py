@@ -53,7 +53,9 @@ def _layout_langs():
     # ponytail: read once; after changing layouts in system settings, restart SwitchLang.
     global _langs
     if _langs is None:
-        query = subprocess.run(['setxkbmap', '-query'], capture_output=True, text=True, check=True).stdout
+        from core.os_linux import host_env  # os_linux imports this module; import at call time
+        query = subprocess.run(['setxkbmap', '-query'], env=host_env(),
+                               capture_output=True, text=True, check=True).stdout
         codes = next(line.split()[1] for line in query.splitlines() if line.startswith('layout:'))
         _langs = [XKB_LAYOUT_LANG.get(code) for code in codes.split(',')]
     return _langs

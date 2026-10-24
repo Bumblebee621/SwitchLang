@@ -21,6 +21,13 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libxcb-cursor0
       - run: pip install -r requirements.txt pyinstaller
       - run: pyinstaller SwitchLang.spec
+      - name: Smoke-run the binary
+        # No desktop here, so the app gets as far as its startup error dialog and waits;
+        # still running after 10 s means imports, models and Qt all loaded.
+        run: |
+          code=0
+          QT_QPA_PLATFORM=offscreen timeout 10 dist/SwitchLang || code=$?
+          test "$code" -eq 124
       - name: Package
         run: |
           mkdir SwitchLang

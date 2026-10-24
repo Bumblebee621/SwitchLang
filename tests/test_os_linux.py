@@ -2,11 +2,29 @@
 test_os_linux.py — key tables and the forward-or-block decision of the Linux input layer.
 """
 
+import os
+import sys
 import unittest
 from unittest import mock
 
 from core import os_linux
 from core.keymap import CHAR_TO_VK_EN, CHAR_TO_VK_HE
+
+
+class TestHostEnv(unittest.TestCase):
+
+    def test_restores_original_library_path(self):
+        with mock.patch.dict(os.environ, {'LD_LIBRARY_PATH': '/tmp/_MEI1', 'LD_LIBRARY_PATH_ORIG': '/usr/lib'}):
+            env = os_linux.host_env()
+        self.assertEqual(env['LD_LIBRARY_PATH'], '/usr/lib')
+        self.assertNotIn('LD_LIBRARY_PATH_ORIG', env)
+
+    def test_frozen_without_original_drops_library_path(self):
+        with mock.patch.dict(os.environ, {'LD_LIBRARY_PATH': '/tmp/_MEI1'}), \
+                mock.patch.object(sys, 'frozen', True, create=True):
+            os.environ.pop('LD_LIBRARY_PATH_ORIG', None)
+            env = os_linux.host_env()
+        self.assertNotIn('LD_LIBRARY_PATH', env)
 
 
 class TestKeyTables(unittest.TestCase):
