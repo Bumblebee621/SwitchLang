@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=SwitchLang
+Comment=Fixes text typed in the wrong keyboard layout (English/Hebrew)
+Exec=@EXEC@
+Icon=@ICON@
+Categories=Utility;
+X-GNOME-Autostart-enabled=true

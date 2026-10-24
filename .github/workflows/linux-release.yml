@@ -1,0 +1,44 @@
+name: Linux release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # The oldest supported glibc: the binary then runs on Ubuntu 22.04 and anything newer.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      # Qt's X11 plugin needs libxcb-cursor; present on the build host, PyInstaller bundles it.
+      - run: sudo apt-get update && sudo apt-get install -y libxcb-cursor0
+      - run: pip install -r requirements.txt pyinstaller
+      - run: pyinstaller SwitchLang.spec
+      - name: Package
+        run: |
+          mkdir SwitchLang
+          cp dist/SwitchLang data/icon.png installers/linux/install.sh \
+             installers/linux/switchlang.desktop installers/linux/70-switchlang.rules SwitchLang/
+          tar czf SwitchLang-linux-x86_64.tar.gz SwitchLang
+      - name: Smoke-test the installer
+        run: |
+          SwitchLang/install.sh
+          test -x ~/.local/share/switchlang/SwitchLang
+          test -f /etc/udev/rules.d/70-switchlang.rules
+          SwitchLang/install.sh --uninstall
+          test ! -e ~/.local/share/switchlang
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SwitchLang-linux-x86_64
+          path: SwitchLang-linux-x86_64.tar.gz
+      - if: github.event_name == 'release'
+        run: gh release upload "${{ github.event.release.tag_name }}" SwitchLang-linux-x86_64.tar.gz
+        env:
+          GH_TOKEN: ${{ github.token }}
