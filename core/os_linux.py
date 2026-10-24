@@ -9,6 +9,8 @@ Layout switching and the focused window differ per desktop and live in the
 desktop_*.py modules.
 """
 
+import ctypes
+import errno
 import fcntl
 import glob
 import logging
@@ -62,6 +64,8 @@ UINPUT_VENDOR, UINPUT_PRODUCT = 0x5357, 0x4C47
 # (the desktop's per-device event buffer is small).
 _KEY_DELAY = 0.001
 
+IN_ATTRIB, IN_CREATE = 0x4, 0x100  # sys/inotify.h
+
 # evdev key code → Windows VK code, so hooks.py keeps one set of constants.
 _EVDEV_TO_VK = dict(zip(
     [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 30, 31, 32, 33, 34, 35, 36, 37, 38,
@@ -75,7 +79,7 @@ _EVDEV_TO_VK.update({
     14: 0x08, 15: 0x09, 28: 0x0D, 57: 0x20, 58: 0x14, 1: 0x1B,         # Bksp Tab Enter Space Caps Esc
     119: 0x13, 70: 0x91, 104: 0x21, 109: 0x22, 107: 0x23, 102: 0x24,   # Pause ScrLk PgUp PgDn End Home
     105: 0x25, 103: 0x26, 106: 0x27, 108: 0x28, 110: 0x2D, 111: 0x2E,  # ← ↑ → ↓ Ins Del
-    42: 0xA0, 54: 0xA1, 29: 0xA2, 97: 0xA3, 56: 0xA4, 100: 0xA5, 125: 0x5B,  # Shift Ctrl Alt Super
+    42: 0xA0, 54: 0xA1, 29: 0xA2, 97: 0xA3, 56: 0xA4, 100: 0xA5, 125: 0x5B, 126: 0x5C,  # Shift Ctrl Alt Super
 })
 _EVDEV_TO_VK.update({
     82: 0x60, 79: 0x61, 80: 0x62, 81: 0x63, 75: 0x64, 76: 0x65, 77: 0x66, 71: 0x67, 72: 0x68, 73: 0x69,  # KP0-KP9
@@ -90,6 +94,7 @@ _uinput = None
 _caps_lock = False  # mirrors the Caps Lock LED; updated from uinput LED events
 _emit_lock = threading.Lock()
 _reader = None
+_inotify = None  # fd that turns readable when /dev/input changes (hotplug)
 _running = False
 _on_key = _on_click = None
 
@@ -113,28 +118,47 @@ def _bitmap(text):
     return int(''.join(word.zfill(16) for word in text.split()), 16)
 
 
+def _sysfs(path):
+    with open(path, 'rb') as f:
+        return f.read().strip()
+
+
+def _kind(keys, rel, abs_):
+    """'keyboard', 'combo' (keyboard that also moves a pointer), 'pointer' or None,
+    from the key/rel/abs sysfs capability bitmaps."""
+    if keys >> KEY_A & 1 and keys >> KEY_SPACE & 1:
+        return 'combo' if rel & 1 or abs_ & 1 else 'keyboard'  # REL_X / ABS_X
+    if keys >> BTN_LEFT & 1 or keys >> BTN_TOUCH & 1:  # mouse, touchpad, touchscreen
+        return 'pointer'
+    return None
+
+
 def _devices():
     """(keyboards, pointers) as /dev/input paths, excluding our own virtual keyboard."""
     keyboards, pointers = [], []
     for sys_dir in sorted(glob.glob('/sys/class/input/event*')):
-        with open(f'{sys_dir}/device/name', 'rb') as f:
-            if f.read().strip() == UINPUT_NAME:
+        caps = f'{sys_dir}/device/capabilities'
+        try:
+            if _sysfs(f'{sys_dir}/device/name') == UINPUT_NAME:
                 continue
-        with open(f'{sys_dir}/device/capabilities/key') as f:
-            keys = _bitmap(f.read())
+            kind = _kind(*(_bitmap(_sysfs(f'{caps}/{c}').decode()) for c in ('key', 'rel', 'abs')))
+        except OSError:  # unplugged while we looked
+            continue
         path = f'/dev/input/{os.path.basename(sys_dir)}'
-        if keys >> KEY_A & 1 and keys >> KEY_SPACE & 1:
+        if kind == 'keyboard':
             keyboards.append(path)
-        elif keys >> BTN_LEFT & 1 or keys >> BTN_TOUCH & 1:  # mouse, touchpad, touchscreen
+        elif kind:
             pointers.append(path)
+            if kind == 'combo':  # grabbing it would freeze its pointer
+                logger.info('%s is a keyboard with a pointer; its keys bypass SwitchLang', path)
     return keyboards, pointers
 
 
-def _open(path, flags=os.O_RDONLY):
+def _open(path, flags=os.O_RDONLY, level=logging.INFO):
     try:
         return os.open(path, flags | os.O_NONBLOCK)
     except OSError as exc:
-        logger.info('Skipping %s: %s', path, exc)
+        logger.log(level, 'Skipping %s: %s', path, exc)
         return None
 
 
@@ -159,8 +183,71 @@ def _create_uinput():
     os.write(fd, struct.pack('<80sHHHHI', UINPUT_NAME, 0x03, UINPUT_VENDOR, UINPUT_PRODUCT, 1, 0)
              + bytes(4 * 64 * 4))
     fcntl.ioctl(fd, UI_DEV_CREATE)
-    time.sleep(0.2)  # let the desktop open the new device before keys go through it
+    time.sleep(0.5)  # let the desktop (and any remapper) open the new device
+    # A remapper that grabbed our device would feed our own keys back to us forever.
+    own = [d for d in glob.glob('/sys/class/input/event*') if _sysfs(f'{d}/device/name') == UINPUT_NAME]
+    for sys_dir in own:
+        try:
+            node = os.open(f'/dev/input/{os.path.basename(sys_dir)}', os.O_RDONLY)
+            try:
+                fcntl.ioctl(node, EVIOCGRAB, 1)
+                fcntl.ioctl(node, EVIOCGRAB, 0)
+            finally:
+                os.close(node)
+        except OSError as exc:
+            if exc.errno != errno.EBUSY:
+                logger.warning('Cannot check %s for remappers: %s', sys_dir, exc)
+                continue
+            fcntl.ioctl(fd, UI_DEV_DESTROY)
+            os.close(fd)
+            raise RuntimeError('Another program (keyd, kanata, input-remapper…) grabbed SwitchLang\'s '
+                               'virtual keyboard; exclude device 5357:4c47 in its config (README, "keyd").') from exc
+    if not own:
+        logger.warning("SwitchLang's virtual keyboard has no event node; not checked for remappers")
     return fd
+
+
+def _watch_dev_input():
+    """inotify fd for new or newly accessible /dev/input nodes (IN_ATTRIB: udev
+    grants the uaccess ACL after creating the node), or None without hotplug."""
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        fd = libc.inotify_init1(os.O_NONBLOCK | os.O_CLOEXEC)
+        if fd < 0 or libc.inotify_add_watch(fd, b'/dev/input', IN_CREATE | IN_ATTRIB) < 0:
+            err = ctypes.get_errno()
+            if fd >= 0:
+                os.close(fd)
+            raise OSError(err, os.strerror(err))
+        return fd
+    except Exception as exc:
+        logger.warning('Keyboards plugged in later will not be watched: %s', exc)
+        return None
+
+
+def _rescan(release_timeout=0.2):
+    """Open the pointers and grab the keyboards that aren't open yet.
+    Returns how many keyboards were skipped because another program grabbed them."""
+    keyboards, pointers = _devices()
+    known = {*_keyboards.values(), *_pointers.values()}
+    for path in pointers:
+        if path not in known and (fd := _open(path, level=logging.WARNING)) is not None:
+            _pointers[fd] = path
+    busy = 0
+    for path in keyboards:
+        # RDWR so the LED mirror writes in _on_led_event work
+        if path in known or (fd := _open(path, os.O_RDWR)) is None:
+            continue
+        try:
+            _wait_for_keys_released(fd, release_timeout)
+            fcntl.ioctl(fd, EVIOCGRAB, 1)
+        except OSError as exc:  # EBUSY: a remapper (keyd) owns it; we read its virtual keyboard instead
+            logger.info('Not grabbing %s: %s', path, exc)
+            os.close(fd)
+            busy += 1
+            continue
+        _keyboards[fd] = path
+        logger.info('Grabbed keyboard %s', path)
+    return busy
 
 
 # ----- Hook --------------------------------------------------------------------
@@ -170,7 +257,7 @@ _PERMISSION_HELP = ('SwitchLang needs access to the keyboard (/dev/input) and to
 
 
 def start_hooks(on_key, on_click):
-    global _uinput, _on_key, _on_click, _running, _reader, _caps_lock
+    global _uinput, _on_key, _on_click, _running, _reader, _caps_lock, _inotify
     if desktop is None:
         raise RuntimeError('SwitchLang on Linux needs a Hyprland, GNOME or X11 session.')
     desktop.prepare()  # RuntimeError here reaches the startup dialog, before any word is erased
@@ -181,35 +268,26 @@ def start_hooks(on_key, on_click):
         raise PermissionError(_PERMISSION_HELP) from exc
     _caps_lock = _read_caps_lock_sysfs()  # once, before grabbing; LED events keep it current after
 
-    keyboards, pointers = _devices()
-    for path in pointers:
-        if (fd := _open(path)) is not None:
-            _pointers[fd] = path
-    for path in keyboards:
-        if (fd := _open(path, os.O_RDWR)) is None:  # RDWR so the LED mirror writes in _on_led_event work
-            continue
-        try:
-            _wait_for_keys_released(fd)
-            fcntl.ioctl(fd, EVIOCGRAB, 1)
-        except OSError as exc:  # EBUSY: a remapper (keyd) owns it; we read its virtual keyboard instead
-            logger.info('Not grabbing %s: %s', path, exc)
-            os.close(fd)
-            continue
-        _keyboards[fd] = path
-        logger.info('Grabbed keyboard %s', path)
+    busy = _rescan(release_timeout=5.0)
     if not _keyboards:
+        if busy:
+            raise RuntimeError('Every keyboard is already grabbed by another program.')
         raise PermissionError(_PERMISSION_HELP)
 
+    _inotify = _watch_dev_input()
     _running = True
     _reader = threading.Thread(target=_read_loop, daemon=True, name='EvdevReadThread')
     _reader.start()
 
 
 def stop_hooks():
-    global _running, _uinput
+    global _running, _uinput, _inotify
     _running = False
     if _reader:
         _reader.join(timeout=1.0)
+    if _inotify is not None:
+        os.close(_inotify)
+        _inotify = None
     for fd in [*_keyboards, *_pointers]:
         os.close(fd)  # closing a grabbed device releases the grab
     _keyboards.clear()
@@ -221,17 +299,24 @@ def stop_hooks():
 
 
 def _read_loop():
-    # ponytail: devices are found once at start; a keyboard plugged in later is
-    # typed through normally but not watched. Rescan in the poll thread if needed.
     try:
         while _running:
+            # inotify last: unplugged devices are dropped before the rescan reopens their path.
+            fds = [*_keyboards, *_pointers, _uinput] + ([_inotify] if _inotify is not None else [])
             try:
-                ready = select.select([*_keyboards, *_pointers, _uinput], [], [], 0.5)[0]
+                ready = select.select(fds, [], [], 0.5)[0]
             except Exception:  # e.g. a closed fd; back off instead of spinning
                 logger.exception('Error handling input event')
                 time.sleep(0.5)
                 continue
             for fd in ready:
+                if fd == _inotify:
+                    try:
+                        os.read(fd, 65536)  # drain; what changed doesn't matter
+                        _rescan()
+                    except Exception:
+                        logger.exception('Error rescanning input devices')
+                    continue
                 try:
                     data = os.read(fd, _EV.size * 64)
                 except OSError:  # unplugged

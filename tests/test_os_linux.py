@@ -53,6 +53,69 @@ class TestKeyTables(unittest.TestCase):
         self.assertTrue(bits >> 30 & 1)
         self.assertTrue(bits >> 128 & 1)
 
+    def test_right_super_maps_to_vk_rwin(self):
+        self.assertEqual(os_linux._EVDEV_TO_VK[126], 0x5C)
+
+
+class TestDeviceKind(unittest.TestCase):
+    KEYS = 1 << os_linux.KEY_A | 1 << os_linux.KEY_SPACE
+
+    def test_plain_keyboard(self):
+        self.assertEqual(os_linux._kind(self.KEYS, 0, 0), 'keyboard')
+
+    def test_keyboard_with_rel_x_is_combo(self):
+        self.assertEqual(os_linux._kind(self.KEYS, 1, 0), 'combo')
+
+    def test_keyboard_with_abs_x_is_combo(self):
+        self.assertEqual(os_linux._kind(self.KEYS, 0, 1), 'combo')
+
+    def test_mouse_and_touchscreen_are_pointers(self):
+        self.assertEqual(os_linux._kind(1 << os_linux.BTN_LEFT, 1, 0), 'pointer')
+        self.assertEqual(os_linux._kind(1 << os_linux.BTN_TOUCH, 0, 1), 'pointer')
+
+    def test_axes_without_buttons_are_ignored(self):  # e.g. an accelerometer
+        self.assertIsNone(os_linux._kind(0, 0, 1))
+
+
+class TestRescan(unittest.TestCase):
+
+    def test_opens_only_new_devices(self):
+        old, new, mouse = '/dev/input/event1', '/dev/input/event2', '/dev/input/event3'
+        with mock.patch.dict(os_linux._keyboards, {5: old}, clear=True), \
+                mock.patch.dict(os_linux._pointers, {}, clear=True), \
+                mock.patch.object(os_linux, '_devices', return_value=([old, new], [mouse])), \
+                mock.patch.object(os_linux, '_open', side_effect=[8, 7]) as open_, \
+                mock.patch.object(os_linux.fcntl, 'ioctl', return_value=bytes(96)) as ioctl:
+            os_linux._rescan()
+            self.assertEqual(os_linux._keyboards, {5: old, 7: new})
+            self.assertEqual(os_linux._pointers, {8: mouse})
+        self.assertEqual([c.args[0] for c in open_.call_args_list], [mouse, new])
+        ioctl.assert_any_call(7, os_linux.EVIOCGRAB, 1)
+
+
+class TestReadLoop(unittest.TestCase):
+
+    def test_handler_error_is_logged_and_keyboards_released(self):
+        kbd_r, kbd_w = os.pipe()
+        uinput_r, uinput_w = os.pipe()
+        self.addCleanup(lambda: [os.close(fd) for fd in (kbd_r, kbd_w, uinput_r, uinput_w)])
+
+        def boom(code, value):
+            os_linux._running = False  # handle this one event, then leave the loop
+            raise RuntimeError('boom')
+
+        os.write(kbd_w, os_linux._EV.pack(0, 0, os_linux.EV_KEY, 30, 1))
+        with mock.patch.dict(os_linux._keyboards, {kbd_r: '/dev/input/fake'}, clear=True), \
+                mock.patch.dict(os_linux._pointers, {}, clear=True), \
+                mock.patch.object(os_linux, '_uinput', uinput_r), \
+                mock.patch.object(os_linux, '_inotify', None), \
+                mock.patch.object(os_linux, '_running', True), \
+                mock.patch.object(os_linux, '_on_keyboard_event', boom), \
+                mock.patch.object(os_linux.fcntl, 'ioctl') as ioctl, \
+                self.assertLogs('switchlang.os', 'ERROR'):
+            os_linux._read_loop()
+        ioctl.assert_called_once_with(kbd_r, os_linux.EVIOCGRAB, 0)
+
 
 class TestKeyboardEvent(unittest.TestCase):
 
