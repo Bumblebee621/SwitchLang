@@ -110,7 +110,10 @@ def execute_switch(buffer_active, buffer_shadow,
 
     current_layout = get_current_layout()
     if target_layout != current_layout:
-        toggle_layout(target_layout)
+        try:
+            toggle_layout(target_layout)
+        except Exception:  # the word is already erased; the same keys under the old layout restore it
+            logger.exception('Layout switch failed; retyping the original keys')
 
     send_string_as_keys(inject_text, target_layout)
     time.sleep(_CORRECTION_STEP_DELAY)
