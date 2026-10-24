@@ -283,7 +283,7 @@ class SettingsWindow(QMainWindow):
         self.debug_check.toggled.connect(self._toggle_debug_mode)
         dg_layout.addWidget(self.debug_check)
 
-        STORAGE_DIR = os.path.join(os.getenv('APPDATA'), 'SwitchLang')
+        STORAGE_DIR = os.path.dirname(self.config_path)
         debug_desc = QLabel(
             'Records ALL keystrokes to the log file for troubleshooting.\n'
             'Passwords and private data may be recorded.\n'
