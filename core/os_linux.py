@@ -117,9 +117,9 @@ def _devices():
     return keyboards, pointers
 
 
-def _open(path):
+def _open(path, flags=os.O_RDONLY):
     try:
-        return os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        return os.open(path, flags | os.O_NONBLOCK)
     except OSError as exc:
         logger.info('Skipping %s: %s', path, exc)
         return None
@@ -172,7 +172,7 @@ def start_hooks(on_key, on_click):
         if (fd := _open(path)) is not None:
             _pointers[fd] = path
     for path in keyboards:
-        if (fd := _open(path)) is None:
+        if (fd := _open(path, os.O_RDWR)) is None:  # RDWR so the LED mirror writes in _on_led_event work
             continue
         try:
             _wait_for_keys_released(fd)
@@ -257,8 +257,8 @@ def _on_led_event(code, value):
     for fd in _keyboards:
         try:
             os.write(fd, _EV.pack(0, 0, EV_LED, code, value) + _SYN)
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.debug('LED mirror to %s failed: %s', _keyboards[fd], exc)
 
 
 def _on_keyboard_event(code, value):
