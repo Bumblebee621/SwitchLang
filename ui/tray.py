@@ -6,7 +6,7 @@ tray.py — System tray icon and context menu.
 import webbrowser
 from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QApplication
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QAction
-from PyQt6.QtCore import Qt, QSize, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal, pyqtSlot
 import os
 
 
@@ -58,6 +58,9 @@ class SystemTrayApp(QSystemTrayIcon):
         self.setToolTip('SwitchLang — Keyboard layout auto-switcher')
 
         self._build_menu()
+        self._status_timer = QTimer(self)
+        self._status_timer.timeout.connect(self._update_correction_status)
+        self._status_timer.start(500)
 
         self.activated[QSystemTrayIcon.ActivationReason].connect(self._on_activated)
 
@@ -75,6 +78,11 @@ class SystemTrayApp(QSystemTrayIcon):
         self.toggle_action.triggered.connect(self._toggle_engine)
         menu.addAction(self.toggle_action)
 
+        self.correction_status_action = QAction('', menu)
+        self.correction_status_action.setEnabled(False)
+        self.correction_status_action.setVisible(False)
+        menu.addAction(self.correction_status_action)
+
         settings_action = QAction('Settings...', menu)
         settings_action.triggered.connect(self._show_settings)
         menu.addAction(settings_action)
@@ -87,6 +95,12 @@ class SystemTrayApp(QSystemTrayIcon):
 
         self.setContextMenu(menu)
         self._engine_enabled = True
+
+    def _update_correction_status(self):
+        reason = self.hook_manager.correction_status if self.hook_manager.enabled else ''
+        self.correction_status_action.setText(reason)
+        self.correction_status_action.setVisible(bool(reason))
+        self.setToolTip('SwitchLang — ' + reason if reason else 'SwitchLang — Keyboard layout auto-switcher')
 
     def _on_activated(self, reason):
         """Handle tray icon activation (left-click or double-click opens settings)."""

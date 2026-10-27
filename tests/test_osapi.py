@@ -8,6 +8,7 @@ from pathlib import Path
 
 CORE = Path(__file__).resolve().parent.parent / 'core'
 INTERFACE = {
+    'get_per_window_layout_enabled', 'get_input_context',
     'start_hooks', 'stop_hooks', 'is_caps_lock_on', 'is_password_field_active',
     'get_foreground_window', 'get_foreground_exe', 'get_current_layout', 'toggle_layout',
     'send_backspaces', 'toggle_caps_lock', 'send_vk_key', 'send_string_as_keys',

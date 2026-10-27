@@ -97,7 +97,14 @@ class HookManager:
         # Concurrency Lock: True when the switcher thread is erasing/re-injecting text.
         self.is_correcting = False
         # Buffer for keys the user types *while* the switch is happening.
-        self.pending_queue = collections.deque(maxlen=100)
+        self.pending_queue = collections.deque()
+        self._context_lock = threading.RLock()
+        self._input_context = None
+        self._context_generation = 0
+        self._sample_sequence = 0
+        self._published_sequence = 0
+        self._correction_generation = None
+        self._correction_target = None
 
         self._running = False
 
@@ -220,9 +227,48 @@ class HookManager:
 
     def _fire_cre(self, reason):
         """Context Resumption Event — reset sensitivity and all buffers."""
-        self.sensitivity.reset(reason=reason)
-        self._clear_buffers()
-        self._clear_history()
+        with self._context_lock:
+            self._context_generation += 1
+            self.sensitivity.reset(reason=reason)
+            self._clear_buffers()
+            self._clear_history()
+
+    @property
+    def correction_status(self):
+        if self._input_context is None:
+            return ('Auto-correction paused: active layout unavailable. '
+                    'On GNOME, turn off per-window input sources.')
+        return ''
+
+    def _refresh_input_context(self):
+        """Publish one coherent sample; a context loss cancels old corrections."""
+        with self._context_lock:
+            self._sample_sequence += 1
+            sequence = self._sample_sequence
+        # GNOME runs subprocesses here; never hold the keyboard's state lock.
+        context = osapi.get_input_context()
+        with self._context_lock:
+            if sequence < self._published_sequence:
+                # Superseded is not the same as unavailable. The newer sample
+                # and its generation decide whether a correction is still valid.
+                return self._input_context
+            self._published_sequence = sequence
+            if context is not None and context.layout not in ('en', 'he'):
+                context = None
+            previous = self._input_context
+            if context != previous:
+                own_layout_change = (
+                    self.is_correcting and context is not None and previous is not None
+                    and context.identity == previous.identity
+                    and context.layout == self._correction_target
+                )
+                if not own_layout_change:
+                    self._fire_cre('input_context_change')
+            elif context is None and (self.buffer_active or self.history_deque):
+                self._fire_cre('input_context_unavailable')
+            self._input_context = context
+            self._cached_layout = context.layout if context else 'unknown'
+            return context
 
 
     def _clear_buffers(self):
@@ -319,6 +365,8 @@ class HookManager:
         """
         # 1. While a correction switch is happening, intercept and queue all typing.
         if self.is_correcting:
+            if self._correction_generation != self._context_generation:
+                return False
             caps_lock = osapi.is_caps_lock_on()
             self.pending_queue.append((vk_code, self._shift_pressed, caps_lock))
             return True # Block keys so they don't interleave with correction injection.
@@ -513,6 +561,8 @@ class HookManager:
         self._clear_history()
 
         # Lock the main hook (synchronously) and spin up the heavy-lifter thread.
+        self._correction_generation = self._context_generation
+        self._correction_target = target
         self.is_correcting = True
 
         switch_thread = threading.Thread(
@@ -534,74 +584,84 @@ class HookManager:
         work (pending queue drain + buffer integration) is complete. This
         prevents the hook thread from racing on buffer_active/buffer_shadow.
         """
-        # Pre-emptive cache update: prevents hook from processing keys with old layout
-        # before 'is_correcting' gets flipped back to False.
-        self._cached_layout = target
-
+        completed = False
         try:
-            execute_switch(
-                buf_active,
-                buf_shadow,
-                target,
+            actual_layout = execute_switch(
+                buf_active, buf_shadow, target,
                 correction_block=correction_block,
                 trigger_delimiter=trigger_delimiter,
                 fix_caps=caps_fix,
+                context_is_current=self._correction_is_current,
             )
+            if actual_layout is None:
+                return
 
-            # Drain pending_queue while locked so keystrokes typed during correction are not lost.
-            text_to_inject = ""
-            consumed_items = []
-            while self.pending_queue:
-                item = self.pending_queue.popleft()
-                consumed_items.append(item)
-                q_vk, q_shift, q_caps = item
-
-                ch = vk_to_char(q_vk, q_shift, layout=target, caps_lock=q_caps)
-                if ch:
-                    text_to_inject += ch
-                else:
-                    # Flush accumulated text first
-                    if text_to_inject:
-                        osapi.send_string_as_keys(text_to_inject, target)
-                        text_to_inject = ""
-                    # Replay non-printable keys using explicit VK event
-                    osapi.send_vk_key(q_vk, shift=q_shift)
-
-            if text_to_inject:
-                osapi.send_string_as_keys(text_to_inject, target)
-
-            # Integrate pending characters into the buffers so the engine
-            # knows about the FULL word currently on screen.
-            for q_vk, q_shift, q_caps in consumed_items:
-                if q_vk in DELIMITER_VKS:
+            with self._context_lock:
+                if actual_layout != target:
                     self._clear_buffers()
-                    continue
+                    self._clear_history()
 
-                en_ch, he_ch = get_both_chars(q_vk, q_shift, q_caps)
-                if en_ch:
-                    if target == 'en':
-                        self.buffer_active += en_ch
-                        self.buffer_shadow += he_ch
+            # Pop, replay and integrate one key while holding the state lock.
+            # Releasing correction ownership on an empty queue must be atomic
+            # with that check, or a last key could be queued after the drain.
+            while True:
+                if not self._correction_is_current():
+                    return
+                with self._context_lock:
+                    if self._correction_generation != self._context_generation:
+                        return
+                    if not self.pending_queue:
+                        self.sensitivity.reset(reason='layout_switch')
+                        self._correction_generation = None
+                        self._correction_target = None
+                        self.is_correcting = False
+                        completed = True
+                        return
+                    q_vk, q_shift, q_caps = self.pending_queue.popleft()
+                    ch = vk_to_char(q_vk, q_shift, layout=actual_layout, caps_lock=q_caps)
+                    if actual_layout != target or not ch:
+                        osapi.send_vk_key(q_vk, shift=q_shift)
                     else:
-                        self.buffer_active += he_ch
-                        self.buffer_shadow += en_ch
-                else:
-                    # Non-printable keys handling
-                    if q_vk == VK_BACK:
-                        if self.buffer_active:
-                            self.buffer_active = self.buffer_active[:-1]
-                            self.buffer_shadow = self.buffer_shadow[:-1]
-                    else:
-                        # Other control keys like Arrows suggest cursor movement.
-                        # It is safest to assume context is lost, so clear buffers.
-                        self._clear_buffers()
-
-            self.sensitivity.reset(reason='layout_switch')
+                        osapi.send_string_as_keys(ch, actual_layout)
+                    if actual_layout == target:
+                        self._integrate_pending_key(q_vk, q_shift, q_caps, actual_layout)
         except Exception:
             logger.exception('Error in switch thread')
         finally:
-            self.is_correcting = False
+            if not completed:
+                with self._context_lock:
+                    # These keys were captured for the old context. Replaying
+                    # them into whichever window now has focus is unsafe.
+                    if self.pending_queue:
+                        logger.warning('Correction cancelled; discarding %d old-context queued keys',
+                                       len(self.pending_queue))
+                    self.pending_queue.clear()
+                    self._fire_cre('correction_cancelled')
+                    self.is_correcting = False
+                    self._correction_generation = None
+                    self._correction_target = None
 
+    def _correction_is_current(self):
+        if not self._running or not self.enabled or self.is_suspended:
+            return False
+        context = self._refresh_input_context()
+        with self._context_lock:
+            return (context is not None
+                    and self._correction_generation == self._context_generation)
+
+    def _integrate_pending_key(self, vk, shift, caps, layout):
+        if vk in DELIMITER_VKS:
+            self._clear_buffers()
+            return
+        en_ch, he_ch = get_both_chars(vk, shift, caps)
+        if en_ch:
+            self.buffer_active += en_ch if layout == 'en' else he_ch
+            self.buffer_shadow += he_ch if layout == 'en' else en_ch
+        elif vk == VK_BACK:
+            self.buffer_active = self.buffer_active[:-1]
+            self.buffer_shadow = self.buffer_shadow[:-1]
+        else:
+            self._clear_buffers()
 
 
     # -------------------------------------------------------------------------
@@ -614,6 +674,13 @@ class HookManager:
         Returns:
             True to BLOCK the key from reaching the target application.
         """
+        fresh = True
+        if self._running and osapi.CHECK_CONTEXT_ON_KEY:
+            fresh = self._refresh_input_context() is not None
+        with self._context_lock:
+            return self._on_key_locked(vk, is_down, fresh)
+
+    def _on_key_locked(self, vk, is_down, fresh=True):
         if vk in (VK_SHIFT, VK_LSHIFT, VK_RSHIFT):
             self._shift_pressed = is_down
         elif vk in (VK_CONTROL, VK_LCONTROL, VK_RCONTROL):
@@ -623,6 +690,8 @@ class HookManager:
         elif vk in (VK_LWIN, VK_RWIN):
             self._win_pressed = is_down
         elif is_down and not self._check_suspend_hotkey(vk):
+            if not fresh or (self._running and self._input_context is None):
+                return False
             return self._handle_keypress(vk)
         return False
 
@@ -634,15 +703,8 @@ class HookManager:
         """
         while self._running:
             try:
-                # 1. Update Layout (Skip if mid-switch correction is happening)
-                if not self.is_correcting:
-                    new_layout = osapi.get_current_layout()
-                    if new_layout != 'unknown':
-                        if new_layout != self._cached_layout:
-                            # Manual change detected? Trigger CRE.
-                            self._fire_cre('manual_layout_change')
-
-                        self._cached_layout = new_layout
+                # Keep tracking focus during a correction so old work can cancel.
+                self._refresh_input_context()
 
                 # 2. Update Blacklist and IDE Status
                 exe = self.blacklist.get_foreground_exe()
@@ -656,9 +718,7 @@ class HookManager:
                 self._cached_is_ide_editor = self.blacklist.is_ide_editor(exe)
 
                 # 3. Detect Foreground Window changes (Trigger CRE)
-                hwnd = osapi.get_foreground_window()
-                if self.sensitivity.check_window_change(hwnd):
-                    self._fire_cre('window_change')
+                # Window/control and layout changes are handled together above.
 
                 # 4. Check for Idle Timeout (Trigger CRE)
                 if self.enabled and self.sensitivity.check_idle_timeout(self.idle_timeout):
@@ -675,8 +735,9 @@ class HookManager:
         """Launch the OS hooks and the OS polling thread."""
         self._running = True
 
-        self._cached_layout = osapi.get_current_layout()
+        self._refresh_input_context()
         logger.info('Initial layout: %s', self._cached_layout)
+        logger.info('Per-window input preference: %s', osapi.get_per_window_layout_enabled())
 
         # The hot keyboard hook and the mouse listener. May raise on Linux/macOS;
         # on Windows, install failures are logged in the hook thread.

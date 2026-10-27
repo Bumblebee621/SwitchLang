@@ -27,7 +27,10 @@ _NAMED_KEYS = {'space': 57, 'tab': 15, 'escape': 1, 'shift_l': 42, 'shift_r': 54
 
 def _parse(text):
     """GVariant text from `gsettings get` as Python; strips type prefixes like '@a(ss) '."""
-    return ast.literal_eval(re.sub(r'^@\S+ ', '', text.strip()))
+    text = re.sub(r'^@\S+ ', '', text.strip())
+    if text in ('true', 'false'):
+        return text == 'true'
+    return ast.literal_eval(text)
 
 
 def _gsettings(schema, key):
@@ -37,7 +40,18 @@ def _gsettings(schema, key):
                                  capture_output=True, text=True, check=True, timeout=2).stdout)
 
 
+def get_per_window_layout_enabled():
+    try:
+        enabled = _gsettings(_INPUT_SOURCES, 'per-window')
+        return enabled if isinstance(enabled, bool) else None
+    except Exception:
+        return None
+
+
 def get_layout():
+    # Focus restoration does not persist MRU; never mistake history for live state.
+    if get_per_window_layout_enabled() is not False:
+        return 'unknown'
     # mru-sources is empty until the user's first switch; then sources[0] is active.
     sources = _gsettings(_INPUT_SOURCES, 'mru-sources') or _gsettings(_INPUT_SOURCES, 'sources')
     code = sources[0][1].split('+')[0] if sources else ''  # ('xkb', 'il') or ('xkb', 'us+intl')
@@ -80,7 +94,7 @@ def set_layout(target):
             time.sleep(0.05)
             if get_layout() == target:
                 return
-    logger.warning('GNOME layout did not switch to %s', target)
+    raise TimeoutError(f'GNOME layout did not switch to {target}')
 
 
 def active_window():

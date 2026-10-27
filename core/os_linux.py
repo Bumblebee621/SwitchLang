@@ -22,6 +22,7 @@ import threading
 import time
 
 from core.keymap import CHAR_TO_VK_EN, CHAR_TO_VK_HE
+from core.input_context import InputContext, read_context
 
 if os.environ.get('HYPRLAND_INSTANCE_SIGNATURE'):
     from core import desktop_hyprland as desktop
@@ -32,7 +33,10 @@ elif os.environ.get('DISPLAY') and not os.environ.get('WAYLAND_DISPLAY'):
 else:
     desktop = None
 
+CHECK_CONTEXT_ON_KEY = desktop is not None and desktop.__name__ != 'core.desktop_gnome'
+
 __all__ = [
+    'get_per_window_layout_enabled', 'get_input_context', 'CHECK_CONTEXT_ON_KEY',
     'start_hooks', 'stop_hooks', 'is_caps_lock_on', 'is_password_field_active',
     'get_foreground_window', 'get_foreground_exe', 'get_current_layout', 'toggle_layout',
     'send_backspaces', 'toggle_caps_lock', 'send_vk_key', 'send_string_as_keys',
@@ -283,6 +287,9 @@ def start_hooks(on_key, on_click):
 def stop_hooks():
     global _running, _uinput, _inotify
     _running = False
+    stop_tracking = getattr(desktop, 'stop_context_tracking', None)
+    if stop_tracking:
+        stop_tracking()
     if _reader:
         _reader.join(timeout=1.0)
     if _inotify is not None:
@@ -449,6 +456,23 @@ def is_password_field_active():
     # ponytail: Linux has no portable password-field signal; blacklist password
     # managers instead. AT-SPI (accessibility bus) could provide one.
     return False
+
+
+def get_per_window_layout_enabled():
+    query = getattr(desktop, 'get_per_window_layout_enabled', None)
+    return query() if query else None
+
+
+def get_input_context():
+    if desktop is None:
+        return None
+    if desktop.__name__ == 'core.desktop_gnome':
+        layout = get_current_layout()
+        # Global-mode GNOME retains the existing session-scoped behavior.
+        # Per-window mode reports unknown until a Shell integration is available.
+        return InputContext('gnome-session', 'gnome-session', layout) if layout != 'unknown' else None
+    identity = getattr(desktop, 'input_identity', lambda: (desktop.active_window()[0], None))
+    return read_context(identity, get_current_layout)
 
 
 def get_current_layout():

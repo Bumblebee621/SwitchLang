@@ -4,6 +4,7 @@ os_windows / os_linux, so main.py shows "not implemented" instead of crashing.
 """
 
 __all__ = [
+    'get_per_window_layout_enabled', 'get_input_context', 'CHECK_CONTEXT_ON_KEY',
     'start_hooks', 'stop_hooks', 'is_caps_lock_on', 'is_password_field_active',
     'get_foreground_window', 'get_foreground_exe', 'get_current_layout', 'toggle_layout',
     'send_backspaces', 'toggle_caps_lock', 'send_vk_key', 'send_string_as_keys',
@@ -11,6 +12,15 @@ __all__ = [
 ]
 
 _TODO = 'macOS support is not implemented yet'
+CHECK_CONTEXT_ON_KEY = False
+
+
+def get_per_window_layout_enabled():
+    return None
+
+
+def get_input_context():
+    return None
 
 
 def start_hooks(on_key, on_click):

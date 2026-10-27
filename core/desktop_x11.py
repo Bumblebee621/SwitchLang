@@ -5,6 +5,7 @@ desktop_x11.py — active layout (XKB group) and focused window (EWMH) through l
 import ctypes
 import ctypes.util
 import subprocess
+import threading
 import time
 
 from core.keymap import XKB_LAYOUT_LANG
@@ -31,6 +32,10 @@ _x11.XGetWindowProperty.argtypes = [
     ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_long, ctypes.c_long, ctypes.c_int,
     ctypes.c_ulong, _ulong_p, ctypes.POINTER(ctypes.c_int), _ulong_p, _ulong_p, ctypes.POINTER(_ulong_p)]
 _x11.XFree.argtypes = [ctypes.c_void_p]
+_x11.XSelectInput.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_long]
+_x11.XPending.argtypes = [ctypes.c_void_p]
+_x11.XNextEvent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+_x11.XGetInputFocus.argtypes = [ctypes.c_void_p, _ulong_p, ctypes.POINTER(ctypes.c_int)]
 
 XKB_USE_CORE_KBD = 0x0100
 
@@ -40,10 +45,45 @@ class _XkbState(ctypes.Structure):
     _fields_ = [('group', ctypes.c_ubyte), ('rest', ctypes.c_ubyte * 31)]
 
 
+class _XPropertyEvent(ctypes.Structure):
+    _fields_ = [('type', ctypes.c_int), ('serial', ctypes.c_ulong),
+               ('send_event', ctypes.c_int), ('display', ctypes.c_void_p),
+               ('window', ctypes.c_ulong), ('atom', ctypes.c_ulong),
+               ('time', ctypes.c_ulong), ('state', ctypes.c_int)]
+
+
+class _XEvent(ctypes.Union):
+    _fields_ = [('type', ctypes.c_int), ('property', _XPropertyEvent), ('pad', ctypes.c_long * 24)]
+
+
 _ints = [ctypes.c_int(v) for v in (0, 0, 1, 0, 0)]  # event, error, major (in/out), minor, reason
 _display = _x11.XkbOpenDisplay(None, *[ctypes.byref(i) for i in _ints])
 if not _display:
     raise RuntimeError('Cannot open the X display with XKB (is DISPLAY set?)')
+
+_root = _x11.XDefaultRootWindow(_display)
+_active_window_atom = _x11.XInternAtom(_display, b'_NET_ACTIVE_WINDOW', False)
+_x11.XSelectInput(_display, _root, 1 << 22)  # PropertyChangeMask
+_x11.XFlush(_display)
+_focus_generation = 0
+_event_lock = threading.Lock()
+
+
+def _drain_focus_events():
+    global _focus_generation
+    while _x11.XPending(_display):
+        event = _XEvent()
+        _x11.XNextEvent(_display, ctypes.byref(event))
+        if event.type == 28 and event.property.atom == _active_window_atom:  # PropertyNotify
+            _focus_generation += 1
+
+
+def input_identity():
+    with _event_lock:
+        _drain_focus_events()
+        focus, revert = ctypes.c_ulong(), ctypes.c_int()
+        _x11.XGetInputFocus(_display, ctypes.byref(focus), ctypes.byref(revert))
+        return active_window()[0], (focus.value, _focus_generation)
 
 _langs = None
 
@@ -63,7 +103,8 @@ def _layout_langs():
 
 def get_layout():
     state = _XkbState()
-    _x11.XkbGetState(_display, XKB_USE_CORE_KBD, ctypes.byref(state))
+    if _x11.XkbGetState(_display, XKB_USE_CORE_KBD, ctypes.byref(state)) != 0:
+        return 'unknown'
     langs = _layout_langs()
     return (langs[state.group] if state.group < len(langs) else None) or 'unknown'
 
@@ -75,6 +116,7 @@ def set_layout(target):
         if get_layout() == target:
             return
         time.sleep(0.01)
+    raise TimeoutError(f'X11 layout did not switch to {target}')
 
 
 def prepare():

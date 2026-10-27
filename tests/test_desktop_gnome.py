@@ -12,6 +12,7 @@ class TestGnome(unittest.TestCase):
 
     def setUp(self):
         self.settings = {
+            'per-window': False,
             'mru-sources': [('xkb', 'il'), ('xkb', 'us')],
             'sources': [('xkb', 'us'), ('xkb', 'il')],
             'switch-input-source': ['<Super>space', 'XF86Keyboard'],
@@ -26,6 +27,20 @@ class TestGnome(unittest.TestCase):
 
     def test_layout_is_most_recent_source(self):
         self.assertEqual(desktop_gnome.get_layout(), 'he')
+
+    def test_per_window_restoration_does_not_trust_mru(self):
+        self.settings['per-window'] = True
+        self.assertIs(desktop_gnome.get_per_window_layout_enabled(), True)
+        self.assertEqual(desktop_gnome.get_layout(), 'unknown')
+
+    def test_unknown_preference_does_not_trust_mru(self):
+        del self.settings['per-window']
+        self.assertIsNone(desktop_gnome.get_per_window_layout_enabled())
+        self.assertEqual(desktop_gnome.get_layout(), 'unknown')
+
+    def test_parse_boolean(self):
+        self.assertIs(desktop_gnome._parse('true'), True)
+        self.assertIs(desktop_gnome._parse('false'), False)
 
     def test_layout_falls_back_to_sources_before_first_switch(self):
         self.settings['mru-sources'] = []
@@ -61,6 +76,11 @@ class TestGnome(unittest.TestCase):
         self.settings['switch-input-source'] = []
         with self.assertRaises(RuntimeError):
             desktop_gnome._shortcut_keys()
+
+    def test_layout_timeout_is_reported(self):
+        with mock.patch.object(os_linux, '_emit'), mock.patch.object(desktop_gnome.time, 'sleep'):
+            with self.assertRaises(TimeoutError):
+                desktop_gnome.set_layout('en')
 
     def test_prepare_passes_with_us_and_il(self):
         desktop_gnome.prepare()

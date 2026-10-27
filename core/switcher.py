@@ -23,7 +23,7 @@ _CORRECTION_STEP_DELAY = 0.005  # seconds between correction sub-steps
 def execute_switch(buffer_active, buffer_shadow,
                    target_layout,
                    correction_block=None, trigger_delimiter=None,
-                   fix_caps=False):
+                   fix_caps=False, context_is_current=lambda: True):
     """Execute the erase/toggle/inject correction sequence.
 
     NOTE: The caller (_do_switch) is responsible for the is_correcting lock
@@ -97,28 +97,45 @@ def execute_switch(buffer_active, buffer_shadow,
     # We must explicitly overwrite it before sending backspaces. We do this by
     # injecting a "dummy" character from the target layout (so it won't trigger 
     # a new autocomplete), and then erasing it along with the rest of the word.
+    if not context_is_current():
+        return None
+    current_layout = get_current_layout()
+    if current_layout not in ('en', 'he') or not context_is_current():
+        return None
     dummy_char = 'ש' if target_layout == 'he' else 'q'
-    send_string_as_keys(dummy_char, get_current_layout())
+    send_string_as_keys(dummy_char, current_layout)
     erase_len += 1
 
+    if not context_is_current():
+        return None
     send_backspaces(erase_len)
     time.sleep(_CORRECTION_STEP_DELAY)
 
     if fix_caps:
+        if not context_is_current():
+            return None
         toggle_caps_lock()
         time.sleep(_CORRECTION_STEP_DELAY)
 
     current_layout = get_current_layout()
+    if not context_is_current():
+        return None
     if target_layout != current_layout:
         try:
             toggle_layout(target_layout)
         except Exception:  # the word is already erased; the same keys under the old layout restore it
             logger.exception('Layout switch failed; retyping the original keys')
 
+    if not context_is_current():
+        return None
+    actual_layout = get_current_layout()
+    if actual_layout not in ('en', 'he') or not context_is_current():
+        return None
     send_string_as_keys(inject_text, target_layout)
     time.sleep(_CORRECTION_STEP_DELAY)
 
     # Send Enter as a real VK keypress so apps like Discord recognise it.
-    if needs_vk_return:
+    if needs_vk_return and actual_layout == target_layout and context_is_current():
         send_vk_key(VK_RETURN)
         time.sleep(_CORRECTION_STEP_DELAY)
+    return actual_layout

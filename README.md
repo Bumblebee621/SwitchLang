@@ -6,7 +6,7 @@ SwitchLang runs in the system tray, intercepts keystrokes, and automatically det
 
 ## Features
 
-- **Automatic Layout Correction:** Detects accidental typing in the wrong layout and switches seamlessly without dropping keystrokes.
+- **Automatic Layout Correction:** Detects accidental typing in the wrong layout and corrects the text.
 - **Ultra-Lightweight:** Runs quietly in the background using under 2 MB of RAM with instant startup and zero typing lag.
 - **Smart Programming Mode:** Automatically recognizes coding environments (IDEs, code editors, terminals) and adapts language detection to avoid false switches on code and commands.
 - **Smart Context Resumption:** Automatically resets when you switch windows, click the mouse, pause typing, or select all text (`Ctrl + A`), avoiding false triggers.
@@ -14,6 +14,30 @@ SwitchLang runs in the system tray, intercepts keystrokes, and automatically det
 - **Application Blacklist:** Ignore specific apps and games where layout switching should never trigger.
 - **Adjustable Sensitivity:** Tune detection sensitivity to fit your typing speed and style.
 - **System Startup & Auto-Updater:** Toggle launch on Windows boot and check for updates directly from the tray settings.
+
+## Per-window keyboard layouts
+
+SwitchLang follows the operating system's active layout. It does not assign or
+restore its own language preference for each window. On Windows, this works with
+the "Let me use a different input method for each app window" preference. On
+Hyprland and X11, it follows layout changes made by the desktop or a window-layout
+manager. These paths have automated regression coverage; live Windows and X11
+per-window testing is still pending.
+
+Changing windows or focused controls clears the previous typing context. A
+pending correction stops when its context changes. Keys already queued for the
+old context are discarded rather than replayed into another window; keys pressed
+after a detected change pass through normally. Focus checks and global keyboard
+injection are separate OS operations, so text already emitted before a focus
+change is detected cannot be recalled.
+
+GNOME's per-window mode is **not yet supported**. Its saved recent-source list
+does not reliably report the layout restored on window focus. When per-window
+mode is enabled, or its preference cannot be read, SwitchLang pauses automatic
+correction and shows a message in the tray menu and tooltip. Normal typing
+continues. To use automatic correction on GNOME for now, select one shared input
+source for all windows in GNOME Settings. Global-mode GNOME retains its existing
+limitations: focused-window identity and per-app blacklists are unavailable.
 
 ## Requirements
 

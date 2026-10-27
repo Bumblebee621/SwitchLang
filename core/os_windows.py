@@ -15,8 +15,12 @@ import threading
 import time
 
 from core.keymap import CHAR_TO_VK_EN, CHAR_TO_VK_HE
+from core.input_context import read_context
+
+CHECK_CONTEXT_ON_KEY = True
 
 __all__ = [
+    'get_per_window_layout_enabled', 'get_input_context', 'CHECK_CONTEXT_ON_KEY',
     'start_hooks', 'stop_hooks', 'is_caps_lock_on', 'is_password_field_active',
     'get_foreground_window', 'get_foreground_exe', 'get_current_layout', 'toggle_layout',
     'send_backspaces', 'toggle_caps_lock', 'send_vk_key', 'send_string_as_keys',
@@ -37,6 +41,8 @@ _user32 = ctypes.WinDLL('user32', use_last_error=True)
 user32 = ctypes.windll.user32
 user32.GetForegroundWindow.restype = wintypes.HWND
 user32.GetKeyboardLayout.restype = wintypes.HKL
+_user32.SystemParametersInfoW.argtypes = [wintypes.UINT, wintypes.UINT, wintypes.LPVOID, wintypes.UINT]
+_user32.SystemParametersInfoW.restype = wintypes.BOOL
 
 kernel32 = ctypes.windll.kernel32
 kernel32.GetModuleHandleW.restype = wintypes.HMODULE
@@ -67,6 +73,16 @@ HOOKPROC = ctypes.WINFUNCTYPE(
     wintypes.WPARAM,
     wintypes.LPARAM
 )
+
+WINEVENTPROC = ctypes.WINFUNCTYPE(None, wintypes.HANDLE, wintypes.DWORD,
+    wintypes.HWND, wintypes.LONG, wintypes.LONG, wintypes.DWORD, wintypes.DWORD)
+_user32.SetWinEventHook.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.HMODULE,
+                                  WINEVENTPROC, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD]
+_user32.SetWinEventHook.restype = wintypes.HANDLE
+_user32.UnhookWinEvent.argtypes = [wintypes.HANDLE]
+_user32.UnhookWinEvent.restype = wintypes.BOOL
+_focus_generation = 0
+_focus_proc = None
 
 # Set argtypes/restype for the Windows Hook functions
 _user32.SetWindowsHookExW.argtypes = [
@@ -361,7 +377,8 @@ def toggle_layout(target_layout):
     if not hkl:
         hkl = HKL_EN_US if target_layout == 'en' else HKL_HE
 
-    user32.PostMessageW(hwnd, WM_INPUTLANGCHANGEREQUEST, 0, hkl)
+    if not user32.PostMessageW(hwnd, WM_INPUTLANGCHANGEREQUEST, 0, hkl):
+        raise RuntimeError('Windows rejected the input-language request')
 
     # Wait for the layout to actually change to prevent race conditions
     thread_id = _get_active_thread_id(hwnd)
@@ -369,12 +386,40 @@ def toggle_layout(target_layout):
     expected_primary = 0x09 if target_layout == 'en' else 0x0D
 
     for _ in range(10):  # Wait up to 100ms
+        if user32.GetForegroundWindow() != hwnd:
+            raise RuntimeError('Focus changed while switching keyboard layout')
         current_hkl = user32.GetKeyboardLayout(thread_id)
         lang_id = current_hkl & 0xFFFF
         primary_lang = lang_id & 0x03FF
         if primary_lang == expected_primary:
-            break
+            return
         time.sleep(0.01)
+    raise TimeoutError(f'Windows layout did not switch to {target_layout}')
+
+
+def get_per_window_layout_enabled():
+    """Read Windows' local (per-input-thread) versus session input preference."""
+    enabled = wintypes.BOOL()
+    if not _user32.SystemParametersInfoW(0x104E, 0, ctypes.byref(enabled), 0):
+        return None
+    return bool(enabled.value)
+
+
+def _input_identity():
+    hwnd = user32.GetForegroundWindow()
+    info = GUITHREADINFO(cbSize=ctypes.sizeof(GUITHREADINFO))
+    if not hwnd or not user32.GetGUIThreadInfo(0, ctypes.byref(info)):
+        return None, None
+    return hwnd, (info.hwndFocus or hwnd, _focus_generation)
+
+
+def _focus_event_callback(hook, event, hwnd, object_id, child_id, thread_id, timestamp):
+    global _focus_generation
+    _focus_generation += 1
+
+
+def get_input_context():
+    return read_context(_input_identity, get_current_layout)
 
 
 def get_current_layout():
@@ -521,7 +566,7 @@ def _kb_hook_callback(n_code, w_param, l_param):
 
 def _hook_thread_func():
     """Thread worker that installs the hook and maintains the Windows message pump."""
-    global _hook_proc, _hook_id
+    global _hook_proc, _hook_id, _focus_proc
     _hook_proc = HOOKPROC(_kb_hook_callback)
     h_mod = kernel32.GetModuleHandleW(None)
 
@@ -539,6 +584,14 @@ def _hook_thread_func():
 
     logger.info('Keyboard hook installed (id=%s)', _hook_id)
 
+    # Keep the callback alive and use this thread's existing message pump.
+    # Native events preserve A -> B -> A transitions between layout queries.
+    _focus_proc = WINEVENTPROC(_focus_event_callback)
+    focus_hooks = [_user32.SetWinEventHook(event, event, None, _focus_proc, 0, 0, 0)
+                   for event in (0x0003, 0x8005)]  # foreground window, focused object
+    if not all(focus_hooks):
+        logger.warning('Focus event tracking unavailable; using direct context checks')
+
     # The message pump is required for low-level hooks to receive events.
     msg = wintypes.MSG()
     while _running:
@@ -550,6 +603,9 @@ def _hook_thread_func():
         _user32.TranslateMessage(ctypes.byref(msg))
         _user32.DispatchMessageW(ctypes.byref(msg))
 
+    for hook in focus_hooks:
+        if hook:
+            _user32.UnhookWinEvent(hook)
     _user32.UnhookWindowsHookEx(_hook_id)
     _hook_id = None
     logger.info('Keyboard hook removed')
