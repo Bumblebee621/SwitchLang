@@ -7,12 +7,18 @@ if sys.platform == 'win32':
 
 logger = logging.getLogger('switchlang.startup')
 
+def is_startup_managed():
+    """Whether startup is controlled by the system configuration."""
+    return sys.platform != 'win32' and 'SWITCHLANG_AUTOSTART_MANAGED' in os.environ
+
 def get_current_app_command():
     """Returns the command line string to run the current application.
     
     If frozen (EXE), returns the absolute path to the EXE.
     If script, returns 'python.exe "path/to/main.py"'.
     """
+    if sys.platform != 'win32' and os.environ.get('SWITCHLANG_EXECUTABLE'):
+        return os.environ['SWITCHLANG_EXECUTABLE']
     if getattr(sys, 'frozen', False):
         return f'"{sys.executable}"'
     else:
@@ -60,12 +66,17 @@ if sys.platform == 'win32':
             return False
 
 else:
-    _AUTOSTART = os.path.expanduser('~/.config/autostart/switchlang.desktop')
+    _AUTOSTART = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'),
+                              'autostart', 'switchlang.desktop')
 
     def is_startup_enabled(app_name="SwitchLang"):
+        if is_startup_managed():
+            return os.environ['SWITCHLANG_AUTOSTART_MANAGED'] == '1'
         return os.path.exists(_AUTOSTART)
 
     def set_startup_enabled(enabled, app_name="SwitchLang"):
+        if is_startup_managed():
+            return False
         try:
             if not enabled:
                 if os.path.exists(_AUTOSTART):

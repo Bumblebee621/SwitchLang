@@ -101,22 +101,49 @@ To uninstall, run `./install.sh --uninstall`.
 3. Log out and back in (the rule grants access to the active session).
 4. `python main.py`
 
-### NixOS
+### Nix and NixOS (native package)
 
-Put the rule in your configuration instead of copying the file. Use `services.udev.packages`, not `services.udev.extraRules`: extraRules becomes `99-local.rules`, which runs after systemd's `73-seat-late.rules` applies the `uaccess` tag, so the tag would have no effect.
+The repository provides a source-built Nix package with Python, Qt, and the language models included. Supports Linux on x86_64 and aarch64; aarch64 builds are not yet tested. Enable `nix-command` and `flakes` in your Nix settings to use the commands below.
+
+Try it without installing:
+
+```bash
+nix run github:Bumblebee621/SwitchLang
+```
+
+Install it for your user:
+
+```bash
+nix profile add github:Bumblebee621/SwitchLang#switchlang
+switchlang
+```
+
+These GitHub commands become available after the Nix files are committed and pushed. To build from a checkout, run `nix build` and then `./result/bin/switchlang`. New files must be tracked by Git for Nix to include them. The package also supports `nix-build` through `default.nix`, using your own `<nixpkgs>`.
+
+**NixOS:** use the supplied module to install SwitchLang and configure device access. Add this input to your system flake:
 
 ```nix
-services.udev.packages = [
-  (pkgs.writeTextDir "lib/udev/rules.d/70-switchlang.rules" ''
-    SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_KEYBOARD}=="1", TAG+="uaccess"
-    SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_MOUSE}=="1", TAG+="uaccess"
-    SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TOUCHPAD}=="1", TAG+="uaccess"
-    SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TOUCHSCREEN}=="1", TAG+="uaccess"
-    SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TABLET}=="1", TAG+="uaccess"
-    SUBSYSTEM=="misc", KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"
-  '')
-];
+inputs.switchlang.url = "github:Bumblebee621/SwitchLang";
 ```
+
+Include `switchlang` in your flake's `outputs` arguments, then add `switchlang.nixosModules.default` to your host's `nixpkgs.lib.nixosSystem.modules` list. In that host's configuration:
+
+```nix
+programs.switchlang = {
+  enable = true;
+  autostart = true; # optional; defaults to false
+};
+```
+
+Rebuild with `sudo nixos-rebuild switch`, then log out and back in. The module installs the existing `70-switchlang.rules` through `services.udev.packages` (before systemd applies `uaccess`) and loads `uinput`. This grants the active local session access to input devices; see [Security](#security).
+
+Autostart uses a systemd user service attached to `graphical-session.target`. GNOME handles this automatically. Hyprland sessions must start that target and import their display and Hyprland environment into the user service manager (uwsm handles session integration). For a manually managed Hyprland session, leave `autostart = false` and add `exec-once = switchlang` to `hyprland.conf`. When the NixOS module is enabled, the app's startup checkbox is managed by the system configuration. Remove any older `~/.config/autostart/switchlang.desktop` entry when migrating to the module to avoid duplicate launches.
+
+**Nix on other Linux distributions:** the package handles application dependencies. An administrator still needs to install `installers/linux/70-switchlang.rules`, reload udev, and ensure the `uinput` kernel module is loaded, as described in [Running from source](#running-from-source-1). Then log out and back in. Do not run the tarball's `install.sh` for the Nix package. You can enable per-user autostart in SwitchLang settings.
+
+For profile installations, use `nix profile list` to find the installed entry name, then run `nix profile upgrade <name>`, or update the `switchlang` input in your system flake and rebuild. Remove a profile installation with `nix profile remove <name>`; for NixOS, remove the `programs.switchlang` settings and module import, then rebuild. User settings remain in `$XDG_CONFIG_HOME/SwitchLang` (default `~/.config/SwitchLang`).
+
+For development and CI, `nix flake check` builds the package, runs the unit tests, and smoke-tests the installed Qt launcher offscreen. Keyboard access and real desktop switching still require testing in a graphical session with the udev rules active.
 
 ### keyd
 

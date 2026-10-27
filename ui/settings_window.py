@@ -15,7 +15,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread
 from PyQt6.QtGui import QFont, QIcon, QKeyEvent
 
 from core import osapi
-from core.startup import is_startup_enabled, set_startup_enabled
+from core.startup import is_startup_enabled, is_startup_managed, set_startup_enabled
 from core.updater import check_for_updates, download_and_install
 
 VK_CONTROL = 0x11
@@ -179,6 +179,9 @@ class SettingsWindow(QMainWindow):
         self.startup_check = QCheckBox('Launch SwitchLang on startup')
         self.startup_check.setFont(QFont('Segoe UI', 11))
         self.startup_check.setChecked(is_startup_enabled())
+        if is_startup_managed():
+            self.startup_check.setEnabled(False)
+            self.startup_check.setToolTip('Managed by programs.switchlang.autostart in your NixOS configuration')
         self.startup_check.toggled.connect(self._toggle_startup)
         eg_layout.addWidget(self.startup_check)
 

@@ -65,6 +65,10 @@ Output/
 .DS_Store
 Thumbs.db
 
+# Nix build outputs
+/result
+/result-*
+
 # testing and optimization
 evaluation/*.txt
 testing quadgram distances/*.txt

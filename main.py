@@ -21,7 +21,8 @@ _lock_file = None
 BUNDLE_DIR = sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
 
 # Keep user data in APPDATA (or ~/.config on non-Windows)
-STORAGE_DIR = os.path.join(os.getenv('APPDATA') or os.path.expanduser('~/.config'), 'SwitchLang')
+STORAGE_DIR = os.path.join(os.getenv('APPDATA') or os.getenv('XDG_CONFIG_HOME')
+                           or os.path.expanduser('~/.config'), 'SwitchLang')
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
 _LOG_FORMAT = '%(asctime)s [%(name)s] %(levelname)s: %(message)s'
