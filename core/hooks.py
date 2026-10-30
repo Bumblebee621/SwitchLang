@@ -11,7 +11,7 @@ KEY CONCEPTS:
   HookManager._on_key before the OS or other apps see it.
 - Shadow Buffer: Keeps track of what the keys WOULD be in the other layout.
 - Context Resumption Event (CRE): Resets buffers and sensitivity when the
-  user switches windows, clicks the mouse, or stays idle, signaling a "fresh start".
+  user switches windows, moves the cursor, or stays idle, signaling a "fresh start".
 """
 
 import collections
@@ -44,6 +44,12 @@ VK_BACK = 0x08
 VK_TAB = 0x09
 VK_CAPITAL = 0x14
 VK_A = 0x41   # Used for Ctrl+A CRE
+
+NAVIGATION_VKS = {
+    0x21, 0x22,  # Page Up, Page Down
+    0x23, 0x24,  # End, Home
+    0x25, 0x26, 0x27, 0x28,  # Left, Up, Right, Down
+}
 
 
 # Delimiters trigger word-level evaluation
@@ -363,6 +369,11 @@ class HookManager:
             True to BLOCK the key from reaching the target application.
             False to let the key pass through normally.
         """
+        # Cursor movement invalidates even an in-flight correction.
+        if vk_code in NAVIGATION_VKS:
+            self._fire_cre('navigation_key')
+            return False
+
         # 1. While a correction switch is happening, intercept and queue all typing.
         if self.is_correcting:
             if self._correction_generation != self._context_generation:
